@@ -44,6 +44,14 @@ export default async function plugin(bb: BbPluginApi) {
       default: 5,
       experimental_schema: z.number().int().min(0),
     },
+    projectEmojis: {
+      type: "string",
+      label: "Project emojis",
+      description:
+        "One \"Project name: emoji\" per line, e.g. \"Personal: 🏠\". Shown before the project name in the sidebar.",
+      experimental_multiline: true,
+      default: "",
+    },
   });
 
   // Serialize read-modify-write cycles so concurrent events don't clobber.

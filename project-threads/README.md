@@ -10,6 +10,8 @@ Replaces bb's sidebar thread list:
   button. Each project shows its 5 newest threads, then "Show N more"; change
   the limit under **Max threads per project** in the plugin's settings
   (0 shows all).
+- **Project emojis** — in the plugin's settings, add one `Project name: emoji`
+  per line (e.g. `Personal: 🏠`) to prefix project names in the sidebar.
 
 If another thread list is active, pick this one under
 Settings → Appearance → Sidebar.

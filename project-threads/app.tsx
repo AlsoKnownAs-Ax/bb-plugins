@@ -28,6 +28,7 @@ import type {
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, WorkingEntry } from "./server";
 import { cn } from "@/lib/utils";
+import { parseProjectEmojis, withEmoji } from "@/lib/project-emojis";
 
 const COLLAPSED_KEY = "bb-plugin-project-threads:collapsed";
 const WORKING_SECTION_ID = "__working__";
@@ -455,12 +456,23 @@ function ProjectThreadList({
   const { entries, dismiss } = useWorkingEntries();
   const { collapsed, toggle } = useCollapsed();
   const navigate = useBbNavigate();
-  const maxSetting = useSettings().values?.maxThreadsPerProject;
+  const settings = useSettings().values;
+  const maxSetting = settings?.maxThreadsPerProject;
+  const emojiSetting = settings?.projectEmojis;
+  const emojis = useMemo(
+    () =>
+      parseProjectEmojis(
+        typeof emojiSetting === "string" ? emojiSetting : undefined,
+      ),
+    [emojiSetting],
+  );
   const maxThreads =
     typeof maxSetting === "number" ? maxSetting : DEFAULT_MAX_THREADS;
 
   const { working, byProject, projectNames } = useMemo(() => {
-    const projectNames = new Map(projects.map((p) => [p.id, p.name]));
+    const projectNames = new Map(
+      projects.map((p) => [p.id, withEmoji(emojis, p.name)]),
+    );
     const working: { thread: PluginSidebarThread; busy: boolean }[] = [];
     const byProject = new Map<string, PluginSidebarThread[]>();
     for (const thread of threads) {
@@ -482,7 +494,7 @@ function ProjectThreadList({
       return bt - at;
     });
     return { working, byProject, projectNames };
-  }, [threads, projects, entries]);
+  }, [threads, projects, entries, emojis]);
 
   if (status === "loading") {
     return (
@@ -552,7 +564,7 @@ function ProjectThreadList({
         return (
           <section key={project.id}>
             <SectionHeader
-              title={project.name}
+              title={projectNames.get(project.id) ?? project.name}
               count={list.length}
               open={open}
               onToggle={() => toggle(project.id)}
