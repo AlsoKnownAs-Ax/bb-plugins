@@ -4,7 +4,7 @@
 //   Working   threads that are running, or finished but not yet dismissed
 //             ("Ready"). The check button dismisses one back to its project.
 //   <Project> one collapsible section per project, holding the rest.
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   definePluginApp,
@@ -652,7 +652,86 @@ function ProjectThreadList({
   );
 }
 
-/** Settings page section: one emoji dropdown per project. */
+/** Windows-style emoji picker: a button that opens a 5-column grid. */
+function EmojiPicker({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string | undefined;
+  onChange: (emoji: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+  const pick = (emoji: string | null) => {
+    onChange(emoji);
+    setOpen(false);
+  };
+  const cell =
+    "flex size-9 cursor-pointer items-center justify-center rounded-md text-xl outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        id={id}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className="flex h-9 w-14 cursor-pointer items-center justify-center gap-1 rounded-md border border-input bg-background text-lg outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {value ?? <span className="text-xs text-muted-foreground">None</span>}
+      </button>
+      {open ? (
+        <div
+          role="dialog"
+          aria-label="Choose an emoji"
+          className="absolute right-0 top-full z-50 mt-1 w-max rounded-lg border border-border bg-background p-2 text-foreground shadow-lg"
+        >
+          <div className="grid max-h-64 grid-cols-5 gap-1 overflow-y-auto">
+            {PROJECT_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => pick(emoji)}
+                aria-label={emoji}
+                aria-pressed={emoji === value}
+                className={cn(cell, emoji === value && "bg-accent")}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => pick(null)}
+            className="mt-2 w-full cursor-pointer rounded-md border-t border-border pt-2 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Remove emoji
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Settings page section: one emoji picker per project. */
 function ProjectEmojiSettings() {
   const { status, projects } = useSidebarThreads();
   const { emojis, set } = useProjectEmojis();
@@ -676,19 +755,11 @@ function ProjectEmojiSettings() {
           >
             {project.name}
           </label>
-          <select
+          <EmojiPicker
             id={`emoji-${project.id}`}
-            value={emojis[project.id] ?? ""}
-            onChange={(e) => set(project.id, e.target.value || null)}
-            className="h-8 w-24 cursor-pointer rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">None</option>
-            {PROJECT_EMOJIS.map((emoji) => (
-              <option key={emoji} value={emoji}>
-                {emoji}
-              </option>
-            ))}
-          </select>
+            value={emojis[project.id]}
+            onChange={(emoji) => set(project.id, emoji)}
+          />
         </li>
       ))}
     </ul>
