@@ -35,6 +35,17 @@ const KV_KEY = "working";
 type WorkingMap = Record<string, WorkingEntry>;
 
 export default async function plugin(bb: BbPluginApi) {
+  bb.settings.define({
+    maxThreadsPerProject: {
+      type: "number",
+      label: "Max threads per project",
+      description:
+        "Top-level threads shown under each project before a \"Show more\" link. 0 shows all.",
+      default: 5,
+      experimental_schema: z.number().int().min(0),
+    },
+  });
+
   // Serialize read-modify-write cycles so concurrent events don't clobber.
   let queue: Promise<unknown> = Promise.resolve();
   function mutate(fn: (map: WorkingMap) => boolean): Promise<boolean> {

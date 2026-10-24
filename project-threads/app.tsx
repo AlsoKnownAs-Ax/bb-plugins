@@ -18,6 +18,7 @@ import {
   useSidebarThreadDraft,
   useSidebarThreadRowStatus,
   useSidebarThreadShortcut,
+  useSettings,
 } from "@get-bb/plugin-sdk/app";
 import type {
   PluginSidebarProject,
@@ -32,6 +33,7 @@ const COLLAPSED_KEY = "bb-plugin-project-threads:collapsed";
 const WORKING_SECTION_ID = "__working__";
 const BUSY_STATUSES = new Set(["starting", "active", "stopping"]);
 const BUSY_RUNTIME = new Set(["provisioning", "waiting-for-host"]);
+const DEFAULT_MAX_THREADS = 5;
 
 function isBusy(thread: PluginSidebarThread): boolean {
   return (
@@ -365,16 +367,22 @@ function SectionHeader({
   );
 }
 
-/** A project's threads, with child threads nested under their parent. */
+/**
+ * A project's threads, with child threads nested under their parent. Only the
+ * first `limit` roots show until "Show more" is clicked (0 = no limit).
+ */
 function ThreadTree({
   threads,
   activeThreadId,
   onNavigate,
+  limit = 0,
 }: {
   threads: readonly PluginSidebarThread[];
   activeThreadId: string | null;
   onNavigate: () => void;
+  limit?: number;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const { roots, childrenOf } = useMemo(() => {
     const ids = new Set(threads.map((t) => t.id));
     const childrenOf = new Map<string, PluginSidebarThread[]>();
@@ -409,7 +417,32 @@ function ThreadTree({
       ) : null}
     </li>
   );
-  return <ul>{roots.map((t) => render(t, 0))}</ul>;
+  const capped = !expanded && limit > 0 && roots.length > limit;
+  // Keep the active thread reachable even when it falls past the limit.
+  const shown = capped
+    ? roots.filter(
+        (t, i) =>
+          i < limit ||
+          t.id === activeThreadId ||
+          childrenOf.get(t.id)?.some((c) => c.id === activeThreadId),
+      )
+    : roots;
+  return (
+    <ul>
+      {shown.map((t) => render(t, 0))}
+      {limit > 0 && roots.length > limit ? (
+        <li>
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className={cn(ghostButton, "h-7 w-full justify-start px-2.5")}
+          >
+            {expanded ? "Show less" : `Show ${roots.length - shown.length} more`}
+          </button>
+        </li>
+      ) : null}
+    </ul>
+  );
 }
 
 // ---------------------------------------------------------------- list
@@ -422,6 +455,9 @@ function ProjectThreadList({
   const { entries, dismiss } = useWorkingEntries();
   const { collapsed, toggle } = useCollapsed();
   const navigate = useBbNavigate();
+  const maxSetting = useSettings().values?.maxThreadsPerProject;
+  const maxThreads =
+    typeof maxSetting === "number" ? maxSetting : DEFAULT_MAX_THREADS;
 
   const { working, byProject, projectNames } = useMemo(() => {
     const projectNames = new Map(projects.map((p) => [p.id, p.name]));
@@ -546,6 +582,7 @@ function ProjectThreadList({
                 threads={list}
                 activeThreadId={activeThreadId}
                 onNavigate={onNavigate}
+                limit={maxThreads}
               />
             ) : null}
           </section>

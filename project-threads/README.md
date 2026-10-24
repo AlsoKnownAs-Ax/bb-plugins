@@ -7,7 +7,9 @@ Replaces bb's sidebar thread list:
   its project.
 - **One collapsible section per project** for everything else. Collapsed
   state is remembered per client. Hover a project header for a "+" new-thread
-  button.
+  button. Each project shows its 5 newest threads, then "Show N more"; change
+  the limit under **Max threads per project** in the plugin's settings
+  (0 shows all).
 
 If another thread list is active, pick this one under
 Settings → Appearance → Sidebar.
