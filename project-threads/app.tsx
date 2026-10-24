@@ -28,7 +28,7 @@ import type {
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, WorkingEntry } from "./server";
 import { cn } from "@/lib/utils";
-import { parseProjectEmojis, withEmoji } from "@/lib/project-emojis";
+import { PROJECT_EMOJIS } from "@/lib/project-emojis";
 
 const COLLAPSED_KEY = "bb-plugin-project-threads:collapsed";
 const WORKING_SECTION_ID = "__working__";
@@ -81,6 +81,36 @@ function useWorkingEntries() {
     [rpc, refetch],
   );
   return { entries, dismiss };
+}
+
+/** Project id → emoji, stored on the server and refreshed over realtime. */
+function useProjectEmojis() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [emojis, setEmojis] = useState<Readonly<Record<string, string>>>({});
+  const refetch = useCallback(() => {
+    rpc.call("emojis_list", null).then(
+      (result) => setEmojis(result.emojis),
+      () => undefined,
+    );
+  }, [rpc]);
+  useEffect(refetch, [refetch]);
+  useRealtime("emojis-changed", refetch);
+  const set = useCallback(
+    (projectId: string, emoji: string | null) => {
+      rpc
+        .call("emojis_set", {
+          projectId,
+          emoji: emoji as (typeof PROJECT_EMOJIS)[number] | null,
+        })
+        .then((result) => setEmojis(result.emojis), refetch);
+    },
+    [rpc, refetch],
+  );
+  return { emojis, set };
+}
+
+function withEmoji(emoji: string | undefined, name: string): string {
+  return emoji === undefined ? name : `${emoji} ${name}`;
 }
 
 /** Collapsed section ids, persisted per client. */
@@ -456,22 +486,14 @@ function ProjectThreadList({
   const { entries, dismiss } = useWorkingEntries();
   const { collapsed, toggle } = useCollapsed();
   const navigate = useBbNavigate();
-  const settings = useSettings().values;
-  const maxSetting = settings?.maxThreadsPerProject;
-  const emojiSetting = settings?.projectEmojis;
-  const emojis = useMemo(
-    () =>
-      parseProjectEmojis(
-        typeof emojiSetting === "string" ? emojiSetting : undefined,
-      ),
-    [emojiSetting],
-  );
+  const maxSetting = useSettings().values?.maxThreadsPerProject;
+  const { emojis } = useProjectEmojis();
   const maxThreads =
     typeof maxSetting === "number" ? maxSetting : DEFAULT_MAX_THREADS;
 
   const { working, byProject, projectNames } = useMemo(() => {
     const projectNames = new Map(
-      projects.map((p) => [p.id, withEmoji(emojis, p.name)]),
+      projects.map((p) => [p.id, withEmoji(emojis[p.id], p.name)]),
     );
     const working: { thread: PluginSidebarThread; busy: boolean }[] = [];
     const byProject = new Map<string, PluginSidebarThread[]>();
@@ -630,7 +652,56 @@ function ProjectThreadList({
   );
 }
 
+/** Settings page section: one emoji dropdown per project. */
+function ProjectEmojiSettings() {
+  const { status, projects } = useSidebarThreads();
+  const { emojis, set } = useProjectEmojis();
+  if (status === "loading") {
+    return <p className="text-sm text-muted-foreground">Loading projects…</p>;
+  }
+  if (status === "error") {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Couldn't load projects.
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col divide-y divide-border">
+      {projects.map((project) => (
+        <li key={project.id} className="flex items-center gap-3 py-2">
+          <label
+            htmlFor={`emoji-${project.id}`}
+            className="min-w-0 flex-1 truncate text-sm"
+          >
+            {project.name}
+          </label>
+          <select
+            id={`emoji-${project.id}`}
+            value={emojis[project.id] ?? ""}
+            onChange={(e) => set(project.id, e.target.value || null)}
+            className="h-8 w-24 cursor-pointer rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="">None</option>
+            {PROJECT_EMOJIS.map((emoji) => (
+              <option key={emoji} value={emoji}>
+                {emoji}
+              </option>
+            ))}
+          </select>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default definePluginApp((app) => {
+  app.slots.settingsSection({
+    id: "project-emojis",
+    title: "Project emojis",
+    description: "Shown before each project's name in the sidebar.",
+    component: ProjectEmojiSettings,
+  });
   app.slots.experimental_threadList({
     id: "by-project",
     title: "By project",

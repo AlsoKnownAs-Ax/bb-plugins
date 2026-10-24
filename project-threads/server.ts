@@ -7,6 +7,7 @@
 // open still shows up as Ready next time.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { PROJECT_EMOJIS } from "./lib/project-emojis";
 
 const workingEntrySchema = z.object({
   threadId: z.string(),
@@ -26,11 +27,26 @@ export const rpcContract = defineRpcContract({
     input: z.object({ threadId: z.string().min(1).max(200) }),
     output: z.object({ removed: z.boolean() }),
   },
+  emojis_list: {
+    input: z.null(),
+    output: z.object({ emojis: z.record(z.string(), z.string()) }),
+  },
+  emojis_set: {
+    input: z.object({
+      projectId: z.string().min(1).max(200),
+      /** null clears the project's emoji. */
+      emoji: z.enum(PROJECT_EMOJIS).nullable(),
+    }),
+    output: z.object({ emojis: z.record(z.string(), z.string()) }),
+  },
 });
 
 /** Realtime channel the sidebar listens on. */
 export const WORKING_CHANGED = "working-changed";
 const KV_KEY = "working";
+/** Realtime channel for project emoji changes. */
+export const EMOJIS_CHANGED = "emojis-changed";
+const EMOJIS_KV_KEY = "project-emojis";
 
 type WorkingMap = Record<string, WorkingEntry>;
 
@@ -43,14 +59,6 @@ export default async function plugin(bb: BbPluginApi) {
         "Top-level threads shown under each project before a \"Show more\" link. 0 shows all.",
       default: 5,
       experimental_schema: z.number().int().min(0),
-    },
-    projectEmojis: {
-      type: "string",
-      label: "Project emojis",
-      description:
-        "One \"Project name: emoji\" per line, e.g. \"Personal: 🏠\". Shown before the project name in the sidebar.",
-      experimental_multiline: true,
-      default: "",
     },
   });
 
@@ -157,5 +165,22 @@ export default async function plugin(bb: BbPluginApi) {
     working_dismiss: async ({ threadId }) => ({
       removed: await remove(threadId),
     }),
+    emojis_list: async () => ({
+      emojis: (await bb.storage.kv.get<Record<string, string>>(EMOJIS_KV_KEY)) ?? {},
+    }),
+    emojis_set: ({ projectId, emoji }) => {
+      // Same queue as Working, so two quick picks can't overwrite each other.
+      const run = queue.then(async () => {
+        const emojis =
+          (await bb.storage.kv.get<Record<string, string>>(EMOJIS_KV_KEY)) ?? {};
+        if (emoji === null) delete emojis[projectId];
+        else emojis[projectId] = emoji;
+        await bb.storage.kv.set(EMOJIS_KV_KEY, emojis);
+        bb.realtime.publish(EMOJIS_CHANGED, {});
+        return { emojis };
+      });
+      queue = run.catch(() => undefined);
+      return run;
+    },
   });
 }
