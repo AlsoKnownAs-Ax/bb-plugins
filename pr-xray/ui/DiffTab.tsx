@@ -40,6 +40,9 @@ const KIND_LABEL: Record<ReviewGroup["kind"], string> = {
   noise: "Noise",
 };
 
+/** Viewed state of one file within one group; stored alongside group ids. */
+const fileKey = (groupId: string, path: string) => `file:${groupId}:${path}`;
+
 const toSide = (side: SelectedLineRange["side"]): "LEFT" | "RIGHT" => (side === "deletions" ? "LEFT" : "RIGHT");
 const toAnnotationSide = (side: "LEFT" | "RIGHT") => (side === "LEFT" ? "deletions" : "additions");
 
@@ -107,8 +110,86 @@ export function DiffTab({
   const [submitOpen, setSubmitOpen] = useState(false);
   const [fullFile, setFullFile] = useState<{ file: PrFile; content: string | null; loading: boolean } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const hunkOrder = useMemo(() => groups.flatMap((group) => group.hunkIds), [groups]);
   const [activeHunk, setActiveHunk] = useState<string | null>(null);
+  // Manual expand/collapse; without an entry, viewed means collapsed.
+  const [openOverride, setOpenOverride] = useState<Map<string, boolean>>(new Map());
+
+  /** File paths of each group, in diff order. */
+  const groupPaths = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const group of groups) {
+      const indexes = [...new Set(group.hunkIds.map((id) => hunks.get(id)?.fileIndex).filter((index) => index !== undefined))];
+      map.set(group.id, indexes.sort((a, b) => a - b).map((index) => files.get(index)!.path));
+    }
+    return map;
+  }, [files, groups, hunks]);
+
+  const isFileViewed = useCallback(
+    (groupId: string, path: string) => viewed.has(groupId) || viewed.has(fileKey(groupId, path)),
+    [viewed],
+  );
+  const isOpen = useCallback(
+    (key: string, isViewed: boolean) => openOverride.get(key) ?? !isViewed,
+    [openOverride],
+  );
+  const setOpen = useCallback((key: string, open: boolean) => setOpenOverride((current) => new Map(current).set(key, open)), []);
+  const clearOpen = useCallback(
+    (keys: string[]) =>
+      setOpenOverride((current) => {
+        const next = new Map(current);
+        for (const key of keys) next.delete(key);
+        return next;
+      }),
+    [],
+  );
+
+  /** After a collapse, brings the element's header back if it is now above the viewport. */
+  const keepHeaderInView = useCallback((id: string) => {
+    requestAnimationFrame(() => {
+      const element = document.getElementById(id);
+      const root = scrollRef.current;
+      if (element && root && element.getBoundingClientRect().top < root.getBoundingClientRect().top) {
+        element.scrollIntoView({ block: "start" });
+      }
+    });
+  }, []);
+
+  const setGroupViewed = (group: ReviewGroup, value: boolean) => {
+    const paths = groupPaths.get(group.id) ?? [];
+    onToggleViewed(group.id, value);
+    for (const path of paths) if (viewed.has(fileKey(group.id, path)) !== value) onToggleViewed(fileKey(group.id, path), value);
+    clearOpen([group.id, ...paths.map((path) => fileKey(group.id, path))]);
+    if (value) keepHeaderInView(`group-${group.id}`);
+  };
+
+  const setFileViewed = (group: ReviewGroup, path: string, value: boolean) => {
+    const paths = groupPaths.get(group.id) ?? [];
+    const key = fileKey(group.id, path);
+    onToggleViewed(key, value);
+    if (!value && viewed.has(group.id)) {
+      // Leaving a fully viewed group: keep its other files marked.
+      for (const other of paths) if (other !== path && !viewed.has(fileKey(group.id, other))) onToggleViewed(fileKey(group.id, other), true);
+    }
+    const allViewed = paths.every((other) => (other === path ? value : isFileViewed(group.id, other)));
+    if (allViewed !== viewed.has(group.id)) onToggleViewed(group.id, allViewed);
+    clearOpen([key, group.id]);
+    // Like GitHub: once a file collapses, keep its header in view so the next file follows it.
+    // Viewing the last file collapses the whole group, so return to the group's header instead.
+    if (value) keepHeaderInView(allViewed ? `group-${group.id}` : `file-${key}`);
+  };
+
+  // Hunks you can see: j/k skip collapsed groups and files.
+  const hunkOrder = useMemo(
+    () =>
+      groups.flatMap((group) => {
+        if (!isOpen(group.id, viewed.has(group.id))) return [];
+        return group.hunkIds.filter((id) => {
+          const path = files.get(hunks.get(id)?.fileIndex ?? -1)?.path;
+          return path !== undefined && isOpen(fileKey(group.id, path), isFileViewed(group.id, path));
+        });
+      }),
+    [files, groups, hunks, isFileViewed, isOpen, viewed],
+  );
 
   const scrollTo = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -247,7 +328,7 @@ export function DiffTab({
               <Checkbox
                 className="mt-0.5"
                 checked={viewed.has(group.id)}
-                onCheckedChange={(checked) => onToggleViewed(group.id, checked === true)}
+                onCheckedChange={(checked) => setGroupViewed(group, checked === true)}
                 aria-label={`Mark "${group.title}" viewed`}
               />
               <button type="button" className="min-w-0 flex-1 text-left" onClick={() => scrollTo(`group-${group.id}`)}>
@@ -286,12 +367,26 @@ export function DiffTab({
 
       <div ref={scrollRef} className="min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1400px] space-y-8 p-4 md:p-6">
-          {groups.map((group, index) => (
+          {groups.map((group, index) => {
+            const groupOpen = isOpen(group.id, viewed.has(group.id));
+            return (
             <section key={group.id} id={`group-${group.id}`} data-group-id={group.id} className="scroll-mt-4 space-y-3">
               <header className="space-y-1">
                 <div className="flex items-center gap-2">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-6"
+                    onClick={() => setOpen(group.id, !groupOpen)}
+                    aria-expanded={groupOpen}
+                    aria-label={groupOpen ? `Collapse "${group.title}"` : `Expand "${group.title}"`}
+                  >
+                    <Icon name={groupOpen ? "ChevronDown" : "ChevronRight"} className="size-4" />
+                  </Button>
                   <span className="text-xs text-muted-foreground">{index + 1}</span>
-                  <h2 className="text-base font-semibold">{group.title}</h2>
+                  <button type="button" className="text-left text-base font-semibold" onClick={() => setOpen(group.id, !groupOpen)}>
+                    {group.title}
+                  </button>
                   <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">{KIND_LABEL[group.kind]}</span>
                   <div className="ml-auto flex items-center gap-2">
                     {onShowInDiagram ? (
@@ -301,16 +396,20 @@ export function DiffTab({
                       </Button>
                     ) : null}
                     <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Checkbox checked={viewed.has(group.id)} onCheckedChange={(checked) => onToggleViewed(group.id, checked === true)} />
+                      <Checkbox checked={viewed.has(group.id)} onCheckedChange={(checked) => setGroupViewed(group, checked === true)} />
                       Viewed
                     </label>
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">{group.why}</p>
               </header>
-              {viewed.has(group.id) ? null : (
+              {groupOpen ? (
                 <GroupHunks
                   group={group}
+                  isFileViewed={(path) => isFileViewed(group.id, path)}
+                  onFileViewed={(path, value) => setFileViewed(group, path, value)}
+                  isFileOpen={(path) => isOpen(fileKey(group.id, path), isFileViewed(group.id, path))}
+                  onFileOpen={(path, open) => setOpen(fileKey(group.id, path), open)}
                   hunks={hunks}
                   files={files}
                   data={data}
@@ -324,9 +423,10 @@ export function DiffTab({
                   draftToComment={draftToComment}
                   openFullFile={(file) => void openFullFile(file)}
                 />
-              )}
+              ) : null}
             </section>
-          ))}
+            );
+          })}
           {otherThreads.length > 0 ? (
             <section id="other-threads" className="space-y-2">
               <h2 className="text-base font-semibold">Conversations outside the diff</h2>
@@ -379,8 +479,16 @@ function GroupHunks({
   storedByGithubId,
   draftToComment,
   openFullFile,
+  isFileViewed,
+  onFileViewed,
+  isFileOpen,
+  onFileOpen,
 }: {
   group: ReviewGroup;
+  isFileViewed: (path: string) => boolean;
+  onFileViewed: (path: string, viewed: boolean) => void;
+  isFileOpen: (path: string) => boolean;
+  onFileOpen: (path: string, open: boolean) => void;
   hunks: Map<string, Hunk>;
   files: Map<number, PrFile>;
   data: ReviewGet;
@@ -405,21 +513,69 @@ function GroupHunks({
     <div className="space-y-4">
       {[...byFile.entries()].map(([fileIndex, fileHunks]) => {
         const file = files.get(fileIndex)!;
+        const fileViewed = isFileViewed(file.path);
+        const open = isFileOpen(file.path);
+        const comments =
+          data.pr.threads.filter((thread) => !thread.isResolved && threadVisibleIn(thread, file.path, fileHunks)).length +
+          data.pending.filter((comment) => comment.path === file.path && lineInHunks(fileHunks, comment.side, comment.line)).length;
         return (
-          <div key={fileIndex} className="overflow-hidden rounded-lg border border-border">
-            <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-xs">
-              <Icon name="Code" className="size-3.5 text-muted-foreground" />
-              <span className="truncate font-mono">
-                {file.previousPath ? `${file.previousPath} → ` : ""}
-                {file.path}
-              </span>
-              <span className="text-muted-foreground">
-                <span className="text-success">+{file.additions}</span> <span className="text-destructive">-{file.deletions}</span>
-              </span>
-              <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-xs" onClick={() => openFullFile(file)}>
-                Full file
-              </Button>
+          <div key={fileIndex} id={`file-${fileKey(group.id, file.path)}`} className="scroll-mt-0 rounded-lg border border-border">
+            {/* Sticky so Viewed stays reachable while scrolling a long file. */}
+            <div className={cn("sticky top-0 z-10 rounded-t-lg bg-background", !open && "rounded-b-lg")}>
+              <div
+                className={cn(
+                  "flex items-center gap-2 rounded-t-lg bg-muted/40 px-2 py-1.5 text-xs",
+                  open ? "border-b border-border" : "rounded-b-lg",
+                )}
+              >
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-6"
+                  onClick={() => onFileOpen(file.path, !open)}
+                  aria-expanded={open}
+                  aria-label={open ? `Collapse ${file.path}` : `Expand ${file.path}`}
+                >
+                  <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
+                </Button>
+                <button
+                  type="button"
+                  className={cn("min-w-0 truncate text-left font-mono", fileViewed && "text-muted-foreground")}
+                  onClick={() => onFileOpen(file.path, !open)}
+                >
+                  {file.previousPath ? `${file.previousPath} → ` : ""}
+                  {file.path}
+                </button>
+                <span className="shrink-0 text-muted-foreground">
+                  <span className="text-success">+{file.additions}</span> <span className="text-destructive">-{file.deletions}</span>
+                </span>
+                {comments > 0 ? (
+                  <span
+                    className="flex shrink-0 items-center gap-1 rounded-full border border-warning/60 bg-warning/10 px-1.5 text-warning-text"
+                    title={`${comments} open comment${comments === 1 ? "" : "s"}`}
+                  >
+                    <Icon name="MessageSquare" className="size-3" />
+                    {comments}
+                  </span>
+                ) : null}
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => openFullFile(file)}>
+                    Full file
+                  </Button>
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-0.5",
+                      fileViewed ? "border-border bg-state-active text-foreground" : "border-border text-muted-foreground hover:bg-state-hover",
+                    )}
+                  >
+                    <Checkbox checked={fileViewed} onCheckedChange={(checked) => onFileViewed(file.path, checked === true)} />
+                    Viewed
+                  </label>
+                </div>
+              </div>
             </div>
+            {open ? (
+            <div className="overflow-hidden rounded-b-lg">
             {fileHunks
               .sort((a, b) => file.hunkIds.indexOf(a.id) - file.hunkIds.indexOf(b.id))
               .map((hunk) => (
@@ -438,12 +594,39 @@ function GroupHunks({
                   draftToComment={draftToComment}
                 />
               ))}
+            </div>
+            ) : null}
           </div>
         );
       })}
     </div>
   );
 }
+
+/**
+ * Unchanged-line gaps between hunks: transparent and muted with a leading "⋯",
+ * so they read as skipped context, not as the end of the file.
+ */
+const SEPARATOR_CSS = `
+[data-separator=line-info], [data-separator=line-info-basic] {
+  background-color: transparent;
+  border-block: 1px dashed color-mix(in srgb, var(--diffs-fg-number) 30%, transparent);
+}
+[data-separator] [data-separator-wrapper],
+[data-separator] [data-separator-content],
+[data-separator] [data-expand-button] {
+  background-color: transparent !important;
+}
+[data-separator] [data-separator-content] {
+  color: var(--diffs-fg-number);
+  font-style: italic;
+  opacity: 0.75;
+}
+[data-unmodified-lines]::before {
+  content: "⋯  ";
+  font-style: normal;
+}
+`;
 
 function HunkDiff({
   hunk,
@@ -514,6 +697,7 @@ function HunkDiff({
       enableGutterUtility: true,
       enableLineSelection: true,
       lineHoverHighlight: "number" as const,
+      unsafeCSS: SEPARATOR_CSS,
       onLineSelected: (range: SelectedLineRange | null) => setSelection(range),
       onGutterUtilityClick: (range: SelectedLineRange) => {
         const current = selectionRef.current;
@@ -578,7 +762,7 @@ function HunkDiff({
     <div
       id={`hunk-${hunk.id}`}
       onPointerDown={onActivate}
-      className={cn("scroll-mt-4 border-b border-border last:border-b-0", active && "ring-1 ring-inset ring-ring")}
+      className={cn("scroll-mt-12 border-b border-dashed border-border last:border-b-0", active && "ring-1 ring-inset ring-ring")}
       style={{ "--diffs-font-size": "12px", "--diffs-line-height": "18px" } as React.CSSProperties}
     >
       <PatchDiff<AnnotationItem[]>

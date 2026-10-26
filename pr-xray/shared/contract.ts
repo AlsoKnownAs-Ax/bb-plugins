@@ -130,6 +130,18 @@ export const rpcContract = defineRpcContract({
     input: z.object({ ref: prRefSchema }),
     output: threadOut,
   },
+  "chat.get": {
+    input: z.object({ ref: prRefSchema }),
+    output: z.object({ threadId: z.string().nullable() }),
+  },
+  "chat.start": {
+    input: z.object({ ref: prRefSchema, question: z.string().trim().min(1).max(20000) }),
+    output: z.object({ threadId: z.string() }),
+  },
+  "chat.reset": {
+    input: z.object({ ref: prRefSchema }),
+    output: ok,
+  },
   "settings.get": {
     input: z.null(),
     output: z.object({

@@ -6,6 +6,7 @@ import { rpcContract } from "./shared/contract";
 import { parsePrRef, prRefKey, prRefToSubPath, REVIEW_PANEL_PATH } from "./shared/pr-ref";
 import type { PrDetails, PrRef } from "./shared/schema";
 import { ANALYSIS_TOOL, createAnalysis, findTicketUrl } from "./server/analysis";
+import { chatInstructions, createChat } from "./server/chat";
 import { COMMENTS_CHANGED, TAGS_TOOL, createComments } from "./server/comments";
 import { fixDiagramComments, fixDiffComments, fixSingleComment } from "./server/fix";
 import { createGithub, GithubError } from "./server/github";
@@ -69,6 +70,9 @@ export default async function plugin(bb: BbPluginApi) {
   }
   const invalidate = (ref: PrRef) => prCache.delete(prRefKey(ref));
 
+  const chat = createChat({ bb, models, loadPr, analysisFor: (ref) => store.latestCompletedAnalysis(ref) });
+  bb.onDispose(() => chat.dispose());
+
   function reviewLink(ref: PrRef): string {
     const path = `/plugins/${bb.pluginId}/${REVIEW_PANEL_PATH}/${prRefToSubPath(ref)}`;
     const base = bb.server.experimental_appUrl;
@@ -88,6 +92,7 @@ export default async function plugin(bb: BbPluginApi) {
     async "review.get"({ ref }) {
       const pr = await loadPr(ref);
       store.touchReview(ref, pr.title, pr.url);
+      if (store.latestAnalysis(ref, pr.headSha)?.status === "running") await analysis.reconcile();
       const latest = store.latestAnalysis(ref, pr.headSha);
       const current = latest?.headSha === pr.headSha ? latest : null;
       const completed = current?.status === "done" ? current : store.latestCompletedAnalysis(ref);
@@ -234,6 +239,16 @@ export default async function plugin(bb: BbPluginApi) {
       }
       return fixDiagramComments(bb, pr, open, titles);
     },
+    async "chat.get"({ ref }) {
+      return { threadId: await chat.get(ref) };
+    },
+    async "chat.start"({ ref, question }) {
+      return { threadId: await chat.start(ref, question) };
+    },
+    async "chat.reset"({ ref }) {
+      await chat.reset(ref);
+      return { ok: true };
+    },
     async "settings.get"() {
       let identity: { login: string; source: "token" | "gh" } | null = null;
       let identityError: string | null = null;
@@ -286,7 +301,8 @@ export default async function plugin(bb: BbPluginApi) {
     const tools = [REVIEW_TOOL];
     if (role === "analysis") tools.push(ANALYSIS_TOOL);
     if (role === "tagging") tools.push(TAGS_TOOL);
-    return { tools, skills: [] };
+    const instructions = chatInstructions(context.pluginMetadata);
+    return { tools, skills: [], ...(instructions ? { instructions } : {}) };
   });
 
   // ---- CLI -----------------------------------------------------------------------

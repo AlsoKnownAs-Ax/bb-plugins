@@ -166,7 +166,8 @@ export function ThreadView({
   storedByGithubId: Map<number, StoredComment>;
 }) {
   const navigate = useBbNavigate();
-  const [collapsed, setCollapsed] = useState(thread.isOutdated || thread.isResolved);
+  const settled = thread.isOutdated || thread.isResolved;
+  const [collapsed, setCollapsed] = useState(settled);
   const [replying, setReplying] = useState(false);
   const [busy, setBusy] = useState(false);
   const first = thread.comments[0];
@@ -201,15 +202,25 @@ export function ThreadView({
   };
 
   return (
-    <div className="my-2 max-w-3xl rounded-lg border border-border bg-card font-sans text-sm shadow-xs">
+    <div
+      className={cn(
+        "my-2 max-w-3xl overflow-hidden rounded-lg border border-l-4 font-sans text-sm shadow-xs",
+        settled ? "border-border border-l-muted-foreground/40 bg-card" : "border-warning/60 border-l-warning bg-warning/10",
+      )}
+    >
       <button
         type="button"
         onClick={() => setCollapsed((value) => !value)}
-        className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left text-xs text-muted-foreground hover:bg-state-hover"
+        className={cn(
+          "flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-state-hover",
+          !collapsed && "border-b",
+          settled ? "border-border text-muted-foreground" : "border-warning/40 text-foreground",
+        )}
       >
         <Icon name={collapsed ? "ChevronRight" : "ChevronDown"} className="size-3.5" />
+        {settled ? null : <Icon name="MessageSquare" className="size-3.5 shrink-0 text-warning-text" />}
         <span className="shrink-0 font-medium text-foreground">{first?.author ?? "comment"}</span>
-        <span className="min-w-0 truncate">{first?.body.replace(MARKER, "").split("\n")[0]}</span>
+        <span className={cn("min-w-0 truncate", settled && "text-muted-foreground")}>{first?.body.replace(MARKER, "").split("\n")[0]}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {thread.isOutdated ? <span className="rounded border border-border px-1.5">outdated</span> : null}
           {thread.isResolved ? <span className="rounded border border-border px-1.5">resolved</span> : null}
@@ -304,9 +315,9 @@ export function PendingView({ rpc, prRef, comment }: { rpc: Rpc; prRef: PrRef; c
     );
   }
   return (
-    <div className="my-2 max-w-3xl rounded-lg border border-dashed border-border bg-card px-3 py-2 font-sans text-sm">
+    <div className="my-2 max-w-3xl rounded-lg border border-l-4 border-warning/50 border-l-warning bg-warning/5 px-3 py-2 font-sans text-sm">
       <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="rounded border border-border px-1.5">pending</span>
+        <span className="rounded border border-warning/70 px-1.5 font-medium text-warning-text">pending</span>
         <span>Part of your review; posted when you submit.</span>
         <span className="ml-auto flex gap-1">
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>

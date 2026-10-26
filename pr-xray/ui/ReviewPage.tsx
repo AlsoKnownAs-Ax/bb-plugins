@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { usePortalScopeProps } from "@/lib/portal-scope";
 import { cn } from "@/lib/utils";
 import type { PrRef } from "../shared/schema";
+import { ChatBubble } from "./ChatBubble";
 import { DiffTab, displayGroups, type ViewMode } from "./DiffTab";
 import { ExplainTab } from "./ExplainTab";
 import { uiStore } from "./store";
@@ -18,7 +19,7 @@ type Tab = "diff" | "explain";
 
 function FocusFrame({ focus, children }: { focus: boolean; children: ReactNode }) {
   const scope = usePortalScopeProps();
-  if (!focus) return <div className="flex h-full min-h-0 flex-1 flex-col">{children}</div>;
+  if (!focus) return <div className="relative flex h-full min-h-0 flex-1 flex-col">{children}</div>;
   return createPortal(
     <div {...scope} className="fixed inset-0 z-50 flex flex-col bg-background text-foreground">
       {children}
@@ -166,11 +167,16 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
         ) : null}
       </header>
 
+      {running && current ? (
+        <AnalysisProgress
+          startedAt={current.createdAt}
+          hasAnalysis={analysis !== null}
+          onOpenRun={current.workerThreadId ? () => navigate.toThread(current.workerThreadId!) : null}
+        />
+      ) : null}
       <Banners
-        running={running}
         failed={failed ? (current?.error ?? "Analysis failed.") : null}
         stale={stale && !running}
-        hasAnalysis={analysis !== null}
         onReanalyse={() => void reanalyse()}
         ticketUrl={data.ticketUrl}
         ticketOverridden={data.ticketOverridden}
@@ -217,30 +223,80 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
               setScrollRequest({ groupId, nonce: Date.now() });
             }}
           />
-        ) : (
-          <div className="p-6 text-sm text-muted-foreground">
-            {running ? "The explanation appears here when the analysis finishes (usually 1–3 minutes)." : "No analysis yet."}
+        ) : running ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+            <Icon name="Spinner" className="size-6 animate-spin" />
+            The explanation appears here when the analysis finishes.
           </div>
+        ) : (
+          <div className="p-6 text-sm text-muted-foreground">No analysis yet.</div>
         )}
       </div>
+      <ChatBubble rpc={rpc} prRef={prRef} />
     </FocusFrame>
   );
 }
 
+/** Typical run time; the bar eases towards full around here, never reaching it. */
+const EXPECTED_MS = 60_000;
+
+function AnalysisProgress({
+  startedAt,
+  hasAnalysis,
+  onOpenRun,
+}: {
+  startedAt: string;
+  hasAnalysis: boolean;
+  onOpenRun: (() => void) | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const elapsed = Math.max(0, now - Date.parse(startedAt));
+  const seconds = Math.floor(elapsed / 1000);
+  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  const progress = 1 - Math.exp(-elapsed / (EXPECTED_MS / 2));
+  const slow = elapsed > EXPECTED_MS * 3;
+  return (
+    <div role="status" aria-live="polite" className="border-b border-border bg-muted/40">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-xs">
+        <Icon name="Spinner" className="size-4 animate-spin text-foreground" />
+        <span className="font-medium text-foreground">Analysing the PR</span>
+        <span className="text-muted-foreground">· reading the diff and ticket, grouping hunks, drawing diagrams</span>
+        <span className="font-mono tabular-nums text-muted-foreground">{clock}</span>
+        <span className="text-muted-foreground">
+          {slow
+            ? "Taking longer than usual. Open the run to see what the agent is doing."
+            : hasAnalysis
+              ? "Showing the previous analysis meanwhile."
+              : "Showing the diff by file meanwhile."}
+        </span>
+        {onOpenRun ? (
+          <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-xs" onClick={onOpenRun}>
+            <Icon name="Bot" />
+            Watch the agent
+          </Button>
+        ) : null}
+      </div>
+      <div className="h-0.5 overflow-hidden bg-muted">
+        <div className="h-full bg-primary transition-[width] duration-1000 ease-linear" style={{ width: `${Math.round(progress * 95)}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function Banners({
-  running,
   failed,
   stale,
-  hasAnalysis,
   onReanalyse,
   ticketUrl,
   ticketOverridden,
   onSetTicket,
 }: {
-  running: boolean;
   failed: string | null;
   stale: boolean;
-  hasAnalysis: boolean;
   onReanalyse: () => void;
   ticketUrl: string | null;
   ticketOverridden: boolean;
@@ -251,13 +307,6 @@ function Banners({
   const banner = "flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5 text-xs";
   return (
     <>
-      {running ? (
-        <div className={cn(banner, "bg-muted/40 text-muted-foreground")}>
-          <Icon name="Spinner" className="size-3.5 animate-spin" />
-          Analysing the PR: grouping hunks, reading the ticket and drawing diagrams. This usually takes 1–3 minutes.
-          {hasAnalysis ? " Showing the previous analysis meanwhile." : " Showing the diff by file meanwhile."}
-        </div>
-      ) : null}
       {failed ? (
         <div className={cn(banner, "text-destructive")}>
           <Icon name="AlertTriangle" className="size-3.5" />

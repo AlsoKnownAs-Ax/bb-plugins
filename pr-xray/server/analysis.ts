@@ -16,7 +16,9 @@ import type { Store } from "./store";
 
 export const ANALYSIS_TOOL = "pr_xray_submit_analysis";
 export const ANALYSIS_CHANGED = "analysis-changed";
-const STALE_AFTER_MS = 45 * 60_000;
+const STALE_AFTER_MS = 15 * 60_000;
+/** A worker idle this long after spawn without submitting has given up. */
+const IDLE_GRACE_MS = 60_000;
 
 export interface AnalysisSettings {
   ticketUrlPattern: string;
@@ -34,7 +36,7 @@ export function findTicketUrl(body: string, pattern: string): string | null {
   return match === null ? null : match[0].replace(/[)\]>.,]+$/u, "");
 }
 
-function annotatedDiff(pr: PrDetails): string {
+export function annotatedDiff(pr: PrDetails): string {
   const hunks = new Map(pr.hunks.map((hunk) => [hunk.id, hunk]));
   const parts: string[] = [];
   for (const file of pr.files) {
@@ -160,8 +162,42 @@ export function createAnalysis(deps: {
     }
   }
 
+  /**
+   * Fails running analyses whose worker is gone, errored or went idle without
+   * submitting. Thread events are missed when the daemon or plugin restarts
+   * mid-run, so the worker's actual status is the source of truth.
+   */
+  async function reconcile(): Promise<boolean> {
+    let changed = false;
+    for (const record of store.runningAnalyses()) {
+      const age = Date.now() - Date.parse(record.createdAt);
+      let reason: string | null = null;
+      if (record.workerThreadId) {
+        const thread = await bb.sdk.threads.get({ threadId: record.workerThreadId }).catch(() => null);
+        if (thread === null || thread.deletedAt !== null || thread.archivedAt !== null) {
+          reason = "The analysis agent is gone. Try again.";
+        } else if (thread.status === "error") {
+          reason = "The analysis agent was interrupted (bb restarted or the provider failed). Try again.";
+        } else if (thread.status === "idle" && age > IDLE_GRACE_MS) {
+          reason = "The analysis agent finished without submitting a result.";
+        }
+      } else if (age > IDLE_GRACE_MS) {
+        reason = "The analysis agent never started.";
+      }
+      if (reason === null && age > STALE_AFTER_MS) reason = "The analysis timed out.";
+      if (reason === null) continue;
+      store.failAnalysis(record.id, reason);
+      snapshots.delete(record.id);
+      publish(record.ref);
+      changed = true;
+      if (record.workerThreadId) await cleanupWorker(record.workerThreadId);
+    }
+    return changed;
+  }
+
   async function start(ref: PrRef, options: { pr?: PrDetails } = {}) {
     const pr = options.pr ?? (await github.loadPr(ref));
+    await reconcile();
     const existing = store.latestAnalysis(ref, pr.headSha);
     if (existing?.status === "running" && existing.headSha === pr.headSha) return existing;
 
@@ -274,17 +310,12 @@ export function createAnalysis(deps: {
     void settleWorker(thread.id, `The analysis agent failed: ${error ?? "unknown error"}`);
   });
 
-  // Analyses left running across a restart or stuck for too long.
-  bb.background.schedule("stale-analyses", "*/10 * * * *", async () => {
-    for (const record of store.runningAnalyses()) {
-      if (Date.now() - Date.parse(record.createdAt) < STALE_AFTER_MS) continue;
-      store.failAnalysis(record.id, "The analysis timed out.");
-      publish(record.ref);
-      if (record.workerThreadId) await cleanupWorker(record.workerThreadId);
-    }
+  // Analyses left running across a restart, with a dead worker, or stuck too long.
+  bb.background.schedule("stale-analyses", "* * * * *", async () => {
+    await reconcile();
   });
 
-  return { start };
+  return { start, reconcile };
 }
 
 function safeJson(text: string): unknown {
