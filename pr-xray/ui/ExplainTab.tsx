@@ -55,8 +55,10 @@ export function ExplainTab({
   const fixAll = async () => {
     try {
       const { threadId } = await rpc.call("fix.allDiagram", { ref: data.pr.ref });
-      toast.success("Started a redesign thread; it will post a plan first");
-      navigate.toThread(threadId);
+      // Stay here; open the thread from the toast when the plan is ready.
+      toast.success("Started a redesign thread; it will post a plan first", {
+        action: { label: "Open", onClick: () => navigate.toThread(threadId) },
+      });
     } catch (error) {
       toast.error(errorMessage(error));
     }

@@ -98,11 +98,14 @@ export default async function plugin(bb: BbPluginApi) {
       const completed = current?.status === "done" ? current : store.latestCompletedAnalysis(ref);
       const override = store.ticketOverride(ref);
       const values = await settings.get();
+      const fingerprints = new Set(pr.hunks.map((hunk) => hunk.fingerprint));
+      const viewedRows = store.viewedHunks(ref);
       return {
         pr,
         current,
         completed,
-        viewedGroups: completed ? store.viewedGroups(completed.id) : [],
+        viewedHunks: viewedRows.filter((row) => fingerprints.has(row.fingerprint)).map((row) => row.fingerprint),
+        changedSinceViewed: [...new Set(viewedRows.filter((row) => !fingerprints.has(row.fingerprint)).map((row) => row.path))],
         pending: store.pendingComments(ref),
         comments: store.commentsForPr(ref),
         ticketUrl: override ?? findTicketUrl(pr.body, values.ticketUrlPattern),
@@ -120,10 +123,15 @@ export default async function plugin(bb: BbPluginApi) {
       store.touchReview(ref, pr.title, pr.url);
       return { analysis: await analysis.start(ref, { pr }) };
     },
-    "group.setViewed"({ analysisId, groupId, viewed }) {
-      store.setGroupViewed(analysisId, groupId, viewed);
-      const record = store.analysis(analysisId);
-      if (record) comments.publish(record.ref);
+    async "hunks.setViewed"({ ref, fingerprints, viewed }) {
+      const pr = await loadPr(ref);
+      const paths = new Map(pr.files.map((file) => [file.index, file.path]));
+      const wanted = new Set(fingerprints);
+      const hunks = pr.hunks
+        .filter((hunk) => wanted.has(hunk.fingerprint))
+        .map((hunk) => ({ path: paths.get(hunk.fileIndex)!, fingerprint: hunk.fingerprint }));
+      store.setHunksViewed(ref, hunks, viewed, new Set(pr.hunks.map((hunk) => hunk.fingerprint)));
+      comments.publish(ref);
       return { ok: true };
     },
     async "file.contents"({ ref, path, previousPath }) {

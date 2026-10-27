@@ -1,6 +1,6 @@
 // GitHub-style comment UI: threads, the composer, pending drafts and tags.
 import { useState, type KeyboardEvent } from "react";
-import { Markdown, useBbNavigate } from "@get-bb/plugin-sdk/app";
+import { experimental_VoiceInputTextarea as VoiceInputTextarea, Markdown, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
-import { Textarea } from "@/components/ui/textarea";
+import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { COMMENT_TAGS } from "../shared/tags";
 import type {
@@ -82,8 +82,9 @@ export function Composer({
 }) {
   const [body, setBody] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [dictating, setDictating] = useState(false);
   const submit = async (run: (body: string) => Promise<void>) => {
-    if (body.trim() === "" || busy) return;
+    if (body.trim() === "" || busy || dictating) return;
     setBusy(true);
     try {
       await run(body);
@@ -108,13 +109,14 @@ export function Composer({
   };
   return (
     <div className="space-y-2 rounded-md border border-border bg-card p-2">
-      <Textarea
+      <VoiceInputTextarea
         value={body}
-        onChange={(event) => setBody(event.target.value)}
+        onValueChange={setBody}
+        onVoiceInputActiveChange={setDictating}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         autoFocus={autoFocus}
-        className="min-h-20 text-sm"
+        className={cn(TEXTAREA_CLASS, "min-h-20 text-sm")}
       />
       <div className="flex flex-wrap items-center gap-2">
         {suggestion ? (
@@ -140,7 +142,7 @@ export function Composer({
               type="button"
               size="sm"
               variant={action.primary ? "default" : "outline"}
-              disabled={busy || body.trim() === ""}
+              disabled={busy || dictating || body.trim() === ""}
               onClick={() => void submit(action.run)}
             >
               {action.label}
@@ -192,8 +194,8 @@ export function ThreadView({
     setBusy(true);
     try {
       const { threadId } = await rpc.call("fix.thread", { ref: prRef, threadId: thread.id });
-      toast.success("Started a fix thread");
-      navigate.toThread(threadId);
+      // Stay on the review; the fix runs in the background.
+      toast.success("Started a fix thread", { action: { label: "Open", onClick: () => navigate.toThread(threadId) } });
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {

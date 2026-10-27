@@ -35,6 +35,9 @@ const MIGRATIONS = [
   `CREATE INDEX comments_key ON comments (key, created_at)`,
   `CREATE TABLE pending_comments (id TEXT PRIMARY KEY, key TEXT NOT NULL, json TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE viewed_groups (analysis_id TEXT NOT NULL, group_id TEXT NOT NULL, PRIMARY KEY (analysis_id, group_id))`,
+  // Viewed state per hunk content, so it survives new commits and re-analyses.
+  `DROP TABLE viewed_groups`,
+  `CREATE TABLE viewed_hunks (key TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (key, fingerprint))`,
 ];
 
 interface CommentRow {
@@ -238,19 +241,27 @@ export function createStore(bb: BbPluginApi) {
       return rows.map(toAnalysis);
     },
 
-    // ---- viewed groups ----
-    viewedGroups(analysisId: string): string[] {
-      const rows = db.prepare(`SELECT group_id FROM viewed_groups WHERE analysis_id = ?`).all(analysisId) as {
-        group_id: string;
+    // ---- viewed hunks ----
+    viewedHunks(ref: PrRef): { path: string; fingerprint: string }[] {
+      return db.prepare(`SELECT path, fingerprint FROM viewed_hunks WHERE key = ?`).all(prRefKey(ref)) as {
+        path: string;
+        fingerprint: string;
       }[];
-      return rows.map((row) => row.group_id);
     },
 
-    setGroupViewed(analysisId: string, groupId: string, viewed: boolean) {
-      if (viewed) {
-        db.prepare(`INSERT OR IGNORE INTO viewed_groups (analysis_id, group_id) VALUES (?, ?)`).run(analysisId, groupId);
-      } else {
-        db.prepare(`DELETE FROM viewed_groups WHERE analysis_id = ? AND group_id = ?`).run(analysisId, groupId);
+    /** Marking viewed also forgets older versions of those files' hunks (`current` = the PR's fingerprints now). */
+    setHunksViewed(ref: PrRef, hunks: { path: string; fingerprint: string }[], viewed: boolean, current: Set<string>) {
+      const key = prRefKey(ref);
+      if (!viewed) {
+        const remove = db.prepare(`DELETE FROM viewed_hunks WHERE key = ? AND fingerprint = ?`);
+        for (const hunk of hunks) remove.run(key, hunk.fingerprint);
+        return;
+      }
+      const insert = db.prepare(`INSERT OR IGNORE INTO viewed_hunks (key, path, fingerprint) VALUES (?, ?, ?)`);
+      for (const hunk of hunks) insert.run(key, hunk.path, hunk.fingerprint);
+      const remove = db.prepare(`DELETE FROM viewed_hunks WHERE key = ? AND fingerprint = ?`);
+      for (const row of this.viewedHunks(ref)) {
+        if (!current.has(row.fingerprint) && hunks.some((hunk) => hunk.path === row.path)) remove.run(key, row.fingerprint);
       }
     },
 

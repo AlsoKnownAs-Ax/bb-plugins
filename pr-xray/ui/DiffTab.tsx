@@ -6,6 +6,7 @@ import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import {
   experimental_SourceCode as SourceCode,
   experimental_useCodeTheme as useCodeTheme,
+  experimental_VoiceInputTextarea as VoiceInputTextarea,
   useBbNavigate,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
@@ -13,11 +14,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
-import { Textarea } from "@/components/ui/textarea";
+import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { DraftComment, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
 import { Composer, PendingView, ThreadView } from "./comments";
-import { filePatch, firstChangedLine, lineInHunks, newSideLines, threadVisibleIn } from "./diff-utils";
+import { filePatch, firstChangedLine, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
 import { errorMessage, type ReviewGet, type Rpc } from "./useReview";
 
 export type ViewMode = "unified" | "split";
@@ -40,7 +41,7 @@ const KIND_LABEL: Record<ReviewGroup["kind"], string> = {
   noise: "Noise",
 };
 
-/** Viewed state of one file within one group; stored alongside group ids. */
+/** Key of one file within one group, for viewed/open state and element ids. */
 const fileKey = (groupId: string, path: string) => `file:${groupId}:${path}`;
 
 const toSide = (side: SelectedLineRange["side"]): "LEFT" | "RIGHT" => (side === "deletions" ? "LEFT" : "RIGHT");
@@ -79,8 +80,9 @@ export function DiffTab({
   rpc,
   view,
   groups,
-  viewed,
-  onToggleViewed,
+  viewedHunks,
+  onSetViewed,
+  onAskChat,
   activeGroupId,
   onActiveGroupChange,
   scrollRequest,
@@ -90,8 +92,10 @@ export function DiffTab({
   rpc: Rpc;
   view: ViewMode;
   groups: ReviewGroup[];
-  viewed: Set<string>;
-  onToggleViewed: (groupId: string, viewed: boolean) => void;
+  /** Fingerprints of viewed hunks. */
+  viewedHunks: Set<string>;
+  onSetViewed: (fingerprints: string[], viewed: boolean) => void;
+  onAskChat: (question: string) => Promise<void>;
   activeGroupId: string | null;
   onActiveGroupChange: (groupId: string) => void;
   scrollRequest: { groupId: string; nonce: number } | null;
@@ -123,6 +127,33 @@ export function DiffTab({
     }
     return map;
   }, [files, groups, hunks]);
+
+  /** Group ids and fileKeys whose hunks are all viewed. */
+  const viewed = useMemo(() => {
+    const set = new Set<string>();
+    for (const group of groups) {
+      const byPath = new Map<string, boolean>();
+      for (const id of group.hunkIds) {
+        const hunk = hunks.get(id);
+        const path = hunk ? files.get(hunk.fileIndex)?.path : undefined;
+        if (hunk && path !== undefined) byPath.set(path, (byPath.get(path) ?? true) && viewedHunks.has(hunk.fingerprint));
+      }
+      for (const [path, value] of byPath) if (value) set.add(fileKey(group.id, path));
+      if (byPath.size > 0 && [...byPath.values()].every(Boolean)) set.add(group.id);
+    }
+    return set;
+  }, [files, groups, hunks, viewedHunks]);
+
+  const fingerprintsOf = (group: ReviewGroup, path?: string) =>
+    group.hunkIds.flatMap((id) => {
+      const hunk = hunks.get(id);
+      return hunk && (path === undefined || files.get(hunk.fileIndex)?.path === path) ? [hunk.fingerprint] : [];
+    });
+
+  // Files you viewed before and that changed since (new commits).
+  const changedSinceViewed = useMemo(() => new Set(data.changedSinceViewed), [data.changedSinceViewed]);
+  const updatedPaths = (group: ReviewGroup) =>
+    (groupPaths.get(group.id) ?? []).filter((path) => changedSinceViewed.has(path) && !viewed.has(fileKey(group.id, path)));
 
   const isFileViewed = useCallback(
     (groupId: string, path: string) => viewed.has(groupId) || viewed.has(fileKey(groupId, path)),
@@ -156,8 +187,7 @@ export function DiffTab({
 
   const setGroupViewed = (group: ReviewGroup, value: boolean) => {
     const paths = groupPaths.get(group.id) ?? [];
-    onToggleViewed(group.id, value);
-    for (const path of paths) if (viewed.has(fileKey(group.id, path)) !== value) onToggleViewed(fileKey(group.id, path), value);
+    onSetViewed(fingerprintsOf(group), value);
     clearOpen([group.id, ...paths.map((path) => fileKey(group.id, path))]);
     if (value) keepHeaderInView(`group-${group.id}`);
   };
@@ -165,13 +195,8 @@ export function DiffTab({
   const setFileViewed = (group: ReviewGroup, path: string, value: boolean) => {
     const paths = groupPaths.get(group.id) ?? [];
     const key = fileKey(group.id, path);
-    onToggleViewed(key, value);
-    if (!value && viewed.has(group.id)) {
-      // Leaving a fully viewed group: keep its other files marked.
-      for (const other of paths) if (other !== path && !viewed.has(fileKey(group.id, other))) onToggleViewed(fileKey(group.id, other), true);
-    }
+    onSetViewed(fingerprintsOf(group, path), value);
     const allViewed = paths.every((other) => (other === path ? value : isFileViewed(group.id, other)));
-    if (allViewed !== viewed.has(group.id)) onToggleViewed(group.id, allViewed);
     clearOpen([key, group.id]);
     // Like GitHub: once a file collapses, keep its header in view so the next file follows it.
     // Viewing the last file collapses the whole group, so return to the group's header instead.
@@ -290,14 +315,18 @@ export function DiffTab({
   const fixAll = async () => {
     try {
       const { threadId } = await rpc.call("fix.allDiff", { ref: pr.ref });
-      toast.success("Started a thread to fix your open comments");
-      navigate.toThread(threadId);
+      // Stay on the review; the fix runs in the background.
+      toast.success("Started a thread to fix your open comments", {
+        action: { label: "Open", onClick: () => navigate.toThread(threadId) },
+      });
     } catch (error) {
       toast.error(errorMessage(error));
     }
   };
 
   const viewedCount = groups.filter((group) => viewed.has(group.id)).length;
+  const firstUpdated = groups.find((group) => updatedPaths(group).length > 0);
+  const updatedCount = new Set(groups.flatMap(updatedPaths)).size;
   const myOpenThreads = pr.threads.filter(
     (thread) => !thread.isResolved && thread.comments.some((comment) => comment.author.toLowerCase() === pr.viewer.toLowerCase()),
   ).length;
@@ -315,6 +344,16 @@ export function DiffTab({
           <div className="h-1.5 overflow-hidden rounded-full bg-muted">
             <div className="h-full bg-foreground/70 transition-all" style={{ width: `${groups.length ? (viewedCount / groups.length) * 100 : 0}%` }} />
           </div>
+          {firstUpdated ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-1.5 rounded-md border border-warning/60 bg-warning/10 px-2 py-1 text-left text-xs text-warning-text hover:bg-warning/20"
+              onClick={() => scrollTo(`group-${firstUpdated.id}`)}
+            >
+              <Icon name="Commit" className="size-3.5 shrink-0" />
+              {updatedCount} file{updatedCount === 1 ? "" : "s"} changed since you viewed {updatedCount === 1 ? "it" : "them"}
+            </button>
+          ) : null}
         </div>
         <nav className="min-h-0 flex-1 overflow-y-auto p-2">
           {groups.map((group, index) => (
@@ -338,6 +377,7 @@ export function DiffTab({
                 </div>
                 <div className="text-[11px] text-muted-foreground">
                   {KIND_LABEL[group.kind]} · {group.hunkIds.length} hunk{group.hunkIds.length === 1 ? "" : "s"}
+                  {updatedPaths(group).length > 0 ? <span className="text-warning-text"> · updated</span> : null}
                 </div>
               </button>
             </div>
@@ -407,6 +447,8 @@ export function DiffTab({
                 <GroupHunks
                   group={group}
                   isFileViewed={(path) => isFileViewed(group.id, path)}
+                  isFileUpdated={(path) => changedSinceViewed.has(path) && !isFileViewed(group.id, path)}
+                  onAskChat={onAskChat}
                   onFileViewed={(path, value) => setFileViewed(group, path, value)}
                   isFileOpen={(path) => isOpen(fileKey(group.id, path), isFileViewed(group.id, path))}
                   onFileOpen={(path, open) => setOpen(fileKey(group.id, path), open)}
@@ -480,12 +522,16 @@ function GroupHunks({
   draftToComment,
   openFullFile,
   isFileViewed,
+  isFileUpdated,
+  onAskChat,
   onFileViewed,
   isFileOpen,
   onFileOpen,
 }: {
   group: ReviewGroup;
   isFileViewed: (path: string) => boolean;
+  isFileUpdated: (path: string) => boolean;
+  onAskChat: (question: string) => Promise<void>;
   onFileViewed: (path: string, viewed: boolean) => void;
   isFileOpen: (path: string) => boolean;
   onFileOpen: (path: string, open: boolean) => void;
@@ -549,6 +595,11 @@ function GroupHunks({
                 <span className="shrink-0 text-muted-foreground">
                   <span className="text-success">+{file.additions}</span> <span className="text-destructive">-{file.deletions}</span>
                 </span>
+                {isFileUpdated(file.path) ? (
+                  <span className="shrink-0 rounded-full border border-warning/60 bg-warning/10 px-1.5 text-warning-text" title="Changed since you marked it viewed">
+                    updated
+                  </span>
+                ) : null}
                 {comments > 0 ? (
                   <span
                     className="flex shrink-0 items-center gap-1 rounded-full border border-warning/60 bg-warning/10 px-1.5 text-warning-text"
@@ -592,6 +643,7 @@ function GroupHunks({
                   onActivate={() => setActiveHunk(hunk.id)}
                   storedByGithubId={storedByGithubId}
                   draftToComment={draftToComment}
+                  onAskChat={onAskChat}
                 />
               ))}
             </div>
@@ -640,7 +692,9 @@ function HunkDiff({
   onActivate,
   storedByGithubId,
   draftToComment,
+  onAskChat,
 }: {
+  onAskChat: (question: string) => Promise<void>;
   hunk: Hunk;
   file: PrFile;
   data: ReviewGet;
@@ -721,7 +775,8 @@ function HunkDiff({
           if (item.kind === "pending") return <PendingView key={item.comment.id} rpc={rpc} prRef={pr.ref} comment={item.comment} />;
           const start = Math.min(item.draft.range.start, item.draft.range.end);
           const end = Math.max(item.draft.range.start, item.draft.range.end);
-          const isNewSide = toSide(item.draft.range.endSide ?? item.draft.range.side) === "RIGHT";
+          const side = toSide(item.draft.range.endSide ?? item.draft.range.side);
+          const isNewSide = side === "RIGHT";
           return (
             <div key="draft" className="my-2 max-w-3xl font-sans">
               <div className="mb-1 text-xs text-muted-foreground">
@@ -729,9 +784,20 @@ function HunkDiff({
               </div>
               <Composer
                 placeholder="Leave a comment (⌘↩ to add to your review)"
-                suggestion={isNewSide ? newSideLines([hunk], start, end) : null}
+                suggestion={isNewSide ? sideLines([hunk], "RIGHT", start, end) : null}
                 onCancel={() => setDraft(null)}
                 actions={[
+                  {
+                    label: "Ask in chat",
+                    run: async (body) => {
+                      const code = sideLines([hunk], side, start, end);
+                      const where = `\`${item.draft.path}\` ${start === end ? `line ${end}` : `lines ${start}-${end}`} (${isNewSide ? "new" : "old"} side)`;
+                      await onAskChat(
+                        [`About ${where}:`, ...(code ? ["```", ...code, "```"] : []), "", body].join("\n"),
+                      );
+                      setDraft(null);
+                    },
+                  },
                   {
                     label: "Add single comment",
                     run: async (body) => {
@@ -755,7 +821,7 @@ function HunkDiff({
         })}
       </div>
     ),
-    [data.pending.length, draftToComment, hunk, pr.ref, pr.viewer, rpc, setDraft, storedByGithubId],
+    [data.pending.length, draftToComment, hunk, onAskChat, pr.ref, pr.viewer, rpc, setDraft, storedByGithubId],
   );
 
   return (
@@ -790,6 +856,7 @@ function SubmitReviewDialog({
   const [body, setBody] = useState("");
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
   const [busy, setBusy] = useState(false);
+  const [dictating, setDictating] = useState(false);
   const own = data.pr.isOwnPr;
   const submit = async () => {
     setBusy(true);
@@ -818,7 +885,13 @@ function SubmitReviewDialog({
         <p className="text-sm text-muted-foreground">
           {data.pending.length} pending comment{data.pending.length === 1 ? "" : "s"} will be posted to GitHub.
         </p>
-        <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Leave a summary (optional)" className="min-h-24" />
+        <VoiceInputTextarea
+          value={body}
+          onValueChange={setBody}
+          onVoiceInputActiveChange={setDictating}
+          placeholder="Leave a summary (optional)"
+          className={cn(TEXTAREA_CLASS, "min-h-24")}
+        />
         <div className="space-y-1.5">
           {options.map((option) => {
             const disabled = own && option.value !== "COMMENT";
@@ -846,7 +919,7 @@ function SubmitReviewDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || (data.pending.length === 0 && body.trim() === "")}>
+          <Button onClick={() => void submit()} disabled={busy || dictating || (data.pending.length === 0 && body.trim() === "")}>
             Submit review
           </Button>
         </DialogFooter>

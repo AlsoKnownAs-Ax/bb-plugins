@@ -103,6 +103,8 @@ export type AnalysisResult = z.infer<typeof analysisResultSchema>;
 
 export const hunkSchema = z.object({
   id: z.string(),
+  /** Content hash that survives new commits; viewed state is keyed on it. */
+  fingerprint: z.string(),
   fileIndex: z.number(),
   header: z.string(),
   /** Patch text for this hunk only, starting at its `@@` line. */

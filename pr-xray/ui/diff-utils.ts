@@ -44,13 +44,16 @@ export function threadVisibleIn(thread: ReviewThread, path: string, hunks: Hunk[
   return thread.path === path && thread.line !== null && lineInHunks(hunks, thread.side, thread.line);
 }
 
-/** New-side text for lines start..end, used to seed suggestion blocks. */
-export function newSideLines(hunks: Hunk[], start: number, end: number): string[] | null {
+/** One side's text for lines start..end: seeds suggestion blocks and chat questions. */
+export function sideLines(hunks: Hunk[], side: "LEFT" | "RIGHT", start: number, end: number): string[] | null {
+  // Lines that only exist on the other side.
+  const other = side === "RIGHT" ? "-" : "+";
   const lines = new Map<number, string>();
   for (const hunk of hunks) {
-    let lineNumber = hunkRange(hunk).newStart;
+    const range = hunkRange(hunk);
+    let lineNumber = side === "RIGHT" ? range.newStart : range.oldStart;
     for (const raw of hunk.patch.split("\n").slice(1)) {
-      if (raw.startsWith("-") || raw.startsWith("\\")) continue;
+      if (raw.startsWith(other) || raw.startsWith("\\")) continue;
       lines.set(lineNumber, raw.slice(1));
       lineNumber += 1;
     }

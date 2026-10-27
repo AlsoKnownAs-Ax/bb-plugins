@@ -38,12 +38,13 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
   const [scrollRequest, setScrollRequest] = useState<{ groupId: string; nonce: number } | null>(null);
   const [diagramFocus, setDiagramFocus] = useState<{ groupId: string; nonce: number } | null>(null);
   const [localViewed, setLocalViewed] = useState<Map<string, boolean>>(new Map());
+  const [chatRequest, setChatRequest] = useState<{ threadId: string; nonce: number } | null>(null);
 
   useEffect(() => {
     if (uiStore.get().focusOnOpen) uiStore.set({ focusOnOpen: false });
   }, []);
   useEffect(() => localStorage.setItem("pr-xray:view", view), [view]);
-  useEffect(() => setLocalViewed(new Map()), [data?.completed?.id, data?.viewedGroups]);
+  useEffect(() => setLocalViewed(new Map()), [data?.viewedHunks]);
 
   // f toggles focus mode, Esc leaves it, 1/2 switch tabs.
   useEffect(() => {
@@ -63,23 +64,34 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
 
   const groups = useMemo(() => (data ? displayGroups(data) : []), [data]);
   const analysis = data?.completed ?? null;
-  const viewed = useMemo(() => {
-    const set = new Set(data?.viewedGroups ?? []);
-    for (const [groupId, value] of localViewed) {
-      if (value) set.add(groupId);
-      else set.delete(groupId);
+  /** Fingerprints of viewed hunks, with optimistic local toggles applied. */
+  const viewedHunks = useMemo(() => {
+    const set = new Set(data?.viewedHunks ?? []);
+    for (const [fingerprint, value] of localViewed) {
+      if (value) set.add(fingerprint);
+      else set.delete(fingerprint);
     }
     return set;
-  }, [data?.viewedGroups, localViewed]);
+  }, [data?.viewedHunks, localViewed]);
 
-  const toggleViewed = useCallback(
-    (groupId: string, value: boolean) => {
-      setLocalViewed((current) => new Map(current).set(groupId, value));
-      if (analysis) {
-        rpc.call("group.setViewed", { analysisId: analysis.id, groupId, viewed: value }).catch((cause: unknown) => toast.error(errorMessage(cause)));
-      }
+  const setHunksViewed = useCallback(
+    (fingerprints: string[], value: boolean) => {
+      setLocalViewed((current) => {
+        const next = new Map(current);
+        for (const fingerprint of fingerprints) next.set(fingerprint, value);
+        return next;
+      });
+      rpc.call("hunks.setViewed", { ref: prRef, fingerprints, viewed: value }).catch((cause: unknown) => toast.error(errorMessage(cause)));
     },
-    [analysis, rpc],
+    [prRef, rpc],
+  );
+
+  const askChat = useCallback(
+    async (question: string) => {
+      const { threadId } = await rpc.call("chat.start", { ref: prRef, question });
+      setChatRequest({ threadId, nonce: Date.now() });
+    },
+    [prRef, rpc],
   );
 
   const reanalyse = async () => {
@@ -193,8 +205,9 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
             rpc={rpc}
             view={view}
             groups={groups}
-            viewed={viewed}
-            onToggleViewed={toggleViewed}
+            viewedHunks={viewedHunks}
+            onSetViewed={setHunksViewed}
+            onAskChat={askChat}
             activeGroupId={activeGroupId}
             onActiveGroupChange={setActiveGroupId}
             scrollRequest={scrollRequest}
@@ -232,7 +245,7 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
           <div className="p-6 text-sm text-muted-foreground">No analysis yet.</div>
         )}
       </div>
-      <ChatBubble rpc={rpc} prRef={prRef} />
+      <ChatBubble rpc={rpc} prRef={prRef} openRequest={chatRequest} />
     </FocusFrame>
   );
 }

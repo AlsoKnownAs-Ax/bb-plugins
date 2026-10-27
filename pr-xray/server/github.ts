@@ -1,5 +1,6 @@
 // GitHub access: a token from settings, else the user's `gh` login.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import type {
   DraftComment,
@@ -171,7 +172,7 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
     const files: PrFile[] = [];
     const hunks: Hunk[] = [];
     rawFiles.forEach((file, index) => {
-      const fileHunks = splitHunks(file.patch ?? "", index);
+      const fileHunks = splitHunks(file.patch ?? "", index, file.filename);
       hunks.push(...fileHunks);
       files.push({
         index,
@@ -319,7 +320,7 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
 export type Github = ReturnType<typeof createGithub>;
 
 /** Splits a GitHub file patch into hunks with stable ids `f<file>h<hunk>`. */
-export function splitHunks(patch: string, fileIndex: number): Hunk[] {
+export function splitHunks(patch: string, fileIndex: number, path: string): Hunk[] {
   if (patch === "") return [];
   const lines = patch.split("\n");
   const hunks: Hunk[] = [];
@@ -329,6 +330,8 @@ export function splitHunks(patch: string, fileIndex: number): Hunk[] {
     const body = current.slice(1);
     hunks.push({
       id: `f${fileIndex}h${hunks.length}`,
+      // Path + body without the @@ line numbers, so the hash survives commits that only shift the hunk.
+      fingerprint: createHash("sha1").update(`${path}\n${body.join("\n")}`).digest("hex").slice(0, 20),
       fileIndex,
       header: current[0]!,
       patch: current.join("\n"),

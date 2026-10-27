@@ -19,7 +19,10 @@ export const reviewGetOutputSchema = z.object({
   current: analysisRecordSchema.nullable(),
   /** Latest completed analysis, possibly for an older head commit. */
   completed: analysisRecordSchema.nullable(),
-  viewedGroups: z.array(z.string()),
+  /** Fingerprints of this PR's hunks you marked viewed. */
+  viewedHunks: z.array(z.string()),
+  /** Files you had viewed whose hunks changed since. */
+  changedSinceViewed: z.array(z.string()),
   pending: z.array(pendingCommentSchema),
   comments: z.array(storedCommentSchema),
   ticketUrl: z.string().nullable(),
@@ -47,8 +50,8 @@ export const rpcContract = defineRpcContract({
     input: z.object({ ref: prRefSchema }),
     output: z.object({ analysis: analysisRecordSchema }),
   },
-  "group.setViewed": {
-    input: z.object({ analysisId: z.string(), groupId: z.string(), viewed: z.boolean() }),
+  "hunks.setViewed": {
+    input: z.object({ ref: prRefSchema, fingerprints: z.array(z.string()).max(5000), viewed: z.boolean() }),
     output: ok,
   },
   "file.contents": {

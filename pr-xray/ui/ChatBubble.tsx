@@ -1,11 +1,12 @@
 // "Ask about this PR": a bubble in the bottom-right corner of the review page
 // that opens a chat with an agent that has the PR, its diff and the analysis.
 import { useEffect, useState } from "react";
-import { ThreadChat } from "@get-bb/plugin-sdk/app";
+import { experimental_VoiceInputTextarea as VoiceInputTextarea, ThreadChat } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { Textarea } from "@/components/ui/textarea";
+import { TEXTAREA_CLASS } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import type { PrRef } from "../shared/schema";
 import { errorMessage, type Rpc } from "./useReview";
 
@@ -16,11 +17,26 @@ const SUGGESTIONS = [
   "Are there missing tests?",
 ];
 
-export function ChatBubble({ rpc, prRef }: { rpc: Rpc; prRef: PrRef }) {
+export function ChatBubble({
+  rpc,
+  prRef,
+  openRequest,
+}: {
+  rpc: Rpc;
+  prRef: PrRef;
+  /** Set after a question was asked from elsewhere (the diff): open on that thread. */
+  openRequest: { threadId: string; nonce: number } | null;
+}) {
   const [open, setOpen] = useState(false);
   // undefined: not loaded yet; null: no chat for this PR yet.
   const [threadId, setThreadId] = useState<string | null | undefined>(undefined);
   const [focusRequest, setFocusRequest] = useState(0);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    setThreadId(openRequest.threadId);
+    setOpen(true);
+  }, [openRequest]);
 
   useEffect(() => {
     if (!open || threadId !== undefined) return;
@@ -104,13 +120,14 @@ export function ChatBubble({ rpc, prRef }: { rpc: Rpc; prRef: PrRef }) {
 function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (question: string) => Promise<void> }) {
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
+  const [dictating, setDictating] = useState(false);
   const [input, setInput] = useState<HTMLTextAreaElement | null>(null);
 
   useEffect(() => input?.focus(), [input, focusRequest]);
 
   const ask = async (question: string) => {
     const text = question.trim();
-    if (text === "" || sending) return;
+    if (text === "" || sending || dictating) return;
     setSending(true);
     try {
       await onAsk(text);
@@ -146,10 +163,11 @@ function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (
           void ask(value);
         }}
       >
-        <Textarea
+        <VoiceInputTextarea
           ref={setInput}
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onValueChange={setValue}
+          onVoiceInputActiveChange={setDictating}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -159,9 +177,9 @@ function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (
           placeholder="Why does this PR change…?"
           rows={3}
           disabled={sending}
-          className="resize-none text-sm"
+          className={cn(TEXTAREA_CLASS, "resize-none text-sm")}
         />
-        <Button type="submit" size="sm" className="self-end" disabled={sending || value.trim() === ""}>
+        <Button type="submit" size="sm" className="self-end" disabled={sending || dictating || value.trim() === ""}>
           {sending ? <Icon name="Spinner" className="animate-spin" /> : <Icon name="ArrowUp" fallback="Send" />}
           Ask
         </Button>

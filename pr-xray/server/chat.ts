@@ -120,10 +120,14 @@ export function createChat(deps: {
     return threadId;
   }
 
+  /** Asks in the PR's chat, starting it on the first question. */
   async function start(ref: PrRef, question: string): Promise<string> {
     const existing = await liveThread(ref);
-    if (existing !== null) return existing;
     await writeContext(ref);
+    if (existing !== null) {
+      await bb.sdk.threads.send({ threadId: existing, mode: "queue-if-active", input: [{ type: "text", text: question, mentions: [] }] });
+      return existing;
+    }
     const project = await findProject(bb, ref);
     const hasRepo = project?.path != null && project.hostId !== null;
     const thread = await bb.sdk.threads.spawn({
