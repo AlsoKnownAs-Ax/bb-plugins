@@ -359,12 +359,6 @@ export function createStore(bb: BbPluginApi) {
       return rows.map(toComment);
     },
 
-    untaggedComments(limit = 50): StoredComment[] {
-      const rows = db
-        .prepare(`SELECT * FROM comments WHERE tag IS NULL ORDER BY created_at LIMIT ?`)
-        .all(limit) as CommentRow[];
-      return rows.map(toComment);
-    },
 
     queryComments(filter: {
       since?: string;

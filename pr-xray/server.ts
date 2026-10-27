@@ -182,6 +182,10 @@ export default async function plugin(bb: BbPluginApi) {
       await comments.setTag(commentId, tag);
       return { ok: true };
     },
+    async "comment.autoTag"({ commentId }) {
+      await comments.autoTag(commentId);
+      return { ok: true };
+    },
     async "diagram.addComment"({ ref, analysisId, diagramId, nodeId, body }) {
       const record = store.analysis(analysisId);
       const node = record?.result?.diagrams

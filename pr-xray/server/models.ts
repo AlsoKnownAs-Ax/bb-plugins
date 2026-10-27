@@ -1,4 +1,4 @@
-// Which model runs analysis and tagging. The user's choice lives in kv; the
+// Which model runs analysis (and, failing a cheap one, tagging). The user's choice lives in kv; the
 // recommendation is the first available entry of a ranked list.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { modelSelectionSchema, type ModelSelection } from "../shared/schema";
@@ -13,6 +13,12 @@ export const RECOMMENDED_MODELS: readonly ModelSelection[] = [
   { providerId: "claude-code", model: "claude-sonnet-4-6", reasoningLevel: "medium" },
 ];
 
+/** Tagging one comment is trivial: the cheapest available model will do. */
+export const CHEAP_MODELS: readonly ModelSelection[] = [
+  { providerId: "claude-code", model: "claude-haiku-5-5", reasoningLevel: "low" },
+  { providerId: "claude-code", model: "claude-haiku-4-5", reasoningLevel: "low" },
+];
+
 const KEY = "modelSelection";
 
 export function createModels(bb: BbPluginApi) {
@@ -25,12 +31,15 @@ export function createModels(bb: BbPluginApi) {
     }
   }
 
-  async function recommended(): Promise<ModelSelection | null> {
-    for (const candidate of RECOMMENDED_MODELS) {
+  async function firstAvailable(candidates: readonly ModelSelection[]): Promise<ModelSelection | null> {
+    for (const candidate of candidates) {
       if (await available(candidate)) return candidate;
     }
     return null;
   }
+
+  const recommended = () => firstAvailable(RECOMMENDED_MODELS);
+  const cheap = () => firstAvailable(CHEAP_MODELS);
 
   async function stored(): Promise<ModelSelection | null> {
     const parsed = modelSelectionSchema.safeParse(await bb.storage.kv.get(KEY));
@@ -47,7 +56,7 @@ export function createModels(bb: BbPluginApi) {
     return (await stored()) ?? (await recommended());
   }
 
-  return { recommended, stored, setStored, effective };
+  return { recommended, cheap, stored, setStored, effective };
 }
 
 export type Models = ReturnType<typeof createModels>;

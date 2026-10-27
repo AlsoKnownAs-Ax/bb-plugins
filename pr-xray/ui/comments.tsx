@@ -27,12 +27,16 @@ const MARKER = /\n*<!-- pr-xray: tag=[a-z-]+ -->\s*$/u;
 export function TagChip({
   tag,
   onChange,
+  onAutoTag,
   className,
 }: {
   tag: CommentTag | null;
   onChange?: (tag: CommentTag) => void;
+  /** Asks a cheap model to pick the tag; resolves once it has. */
+  onAutoTag?: () => Promise<unknown>;
   className?: string;
 }) {
+  const [autoTagging, setAutoTagging] = useState(false);
   const chip = (
     <span
       className={cn(
@@ -41,11 +45,28 @@ export function TagChip({
         className,
       )}
     >
-      {tag ?? "tagging…"}
+      {tag ?? (autoTagging ? "tagging…" : "add tag")}
     </span>
   );
   if (!onChange) return chip;
-  return (
+  const aiButton =
+    onAutoTag && tag === null ? (
+      <button
+        type="button"
+        disabled={autoTagging}
+        className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-state-hover hover:text-foreground disabled:opacity-50"
+        onClick={() => {
+          setAutoTagging(true);
+          onAutoTag()
+            .catch((error: unknown) => toast.error(errorMessage(error)))
+            .finally(() => setAutoTagging(false));
+        }}
+      >
+        <Icon name="Sparkles" fallback="Bot" className="size-3" />
+        AI tag
+      </button>
+    ) : null;
+  const menu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" aria-label="Change tag">
@@ -61,6 +82,13 @@ export function TagChip({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+  if (!aiButton) return menu;
+  return (
+    <span className={cn("inline-flex items-center gap-1", className)}>
+      {menu}
+      {aiButton}
+    </span>
   );
 }
 
@@ -249,6 +277,7 @@ export function ThreadView({
                           toast.error(errorMessage(error)),
                         );
                       }}
+                      onAutoTag={() => rpc.call("comment.autoTag", { commentId: stored.id })}
                     />
                   ) : null}
                 </div>

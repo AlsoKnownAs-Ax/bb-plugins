@@ -99,6 +99,10 @@ export const rpcContract = defineRpcContract({
     input: z.object({ commentId: z.string(), tag: commentTagSchema }),
     output: ok,
   },
+  "comment.autoTag": {
+    input: z.object({ commentId: z.string() }),
+    output: ok,
+  },
   "diagram.addComment": {
     input: z.object({
       ref: prRefSchema,

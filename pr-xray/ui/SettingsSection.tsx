@@ -64,7 +64,7 @@ export function SettingsSection() {
       <div className="space-y-2">
         <div className="text-sm font-medium">Analysis model</div>
         <p className="text-sm text-muted-foreground">
-          Used for grouping, explanations, diagrams and comment tags. A strong mid-size model is enough; you don’t need your most powerful one.
+          Used for grouping, explanations and diagrams. A strong mid-size model is enough; you don’t need your most powerful one. “AI tag” on a comment uses Haiku when available.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {effective ? (

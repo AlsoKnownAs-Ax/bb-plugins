@@ -257,7 +257,7 @@ function DiagramCommentCard({ comment, rpc, onSelect }: { comment: StoredComment
         <button type="button" className="min-w-0 truncate text-xs font-medium hover:underline" onClick={() => onSelect?.(comment)} disabled={!onSelect}>
           {comment.nodeLabel}
         </button>
-        <TagChip className="ml-auto" tag={comment.tag} onChange={(tag) => void call(rpc.call("comment.setTag", { commentId: comment.id, tag }))} />
+        <TagChip className="ml-auto" tag={comment.tag} onChange={(tag) => void call(rpc.call("comment.setTag", { commentId: comment.id, tag }))} onAutoTag={() => rpc.call("comment.autoTag", { commentId: comment.id })} />
       </div>
       <Markdown content={comment.body} className="text-sm" />
       <div className="flex gap-1">
