@@ -82,10 +82,9 @@ export default async function plugin(bb: BbPluginApi) {
   async function openReview(ref: PrRef) {
     const pr = await loadPr(ref);
     store.touchReview(ref, pr.title, pr.url);
-    const current = store.latestAnalysis(ref, pr.headSha);
-    const started =
-      current && current.headSha === pr.headSha && current.status !== "failed" ? current : await analysis.start(ref, { pr });
-    return { pr, analysis: started };
+    // The user starts the analysis from the review page; opening only reports an existing one.
+    const latest = store.latestAnalysis(ref, pr.headSha);
+    return { pr, analysis: latest?.headSha === pr.headSha ? latest : null };
   }
 
   bb.rpc.register(rpcContract, {
@@ -282,7 +281,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: REVIEW_TOOL,
     description:
-      "Open a GitHub pull request in PR X-ray: starts (or reuses) the grouped-diff and visual analysis and returns a link to the review page. Use when the user asks to review or x-ray a PR.",
+      "Open a GitHub pull request in PR X-ray and return a link to the review page, where the user can start the grouped-diff and visual analysis. Use when the user asks to review or x-ray a PR.",
     instructions: `When the user asks to review or "x-ray" a GitHub PR, call ${REVIEW_TOOL} with its URL and share the returned link.`,
     presentation: { label: { pending: "Opening PR in PR X-ray", completed: "Opened PR in PR X-ray" } },
     parameters: z.object({ url: z.string().describe("GitHub PR URL or owner/repo#123") }),
@@ -294,11 +293,11 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         const { pr, analysis: record } = await openReview(ref);
         const state =
-          record.status === "done"
+          record?.status === "done"
             ? "The analysis is ready."
-            : record.status === "running"
+            : record?.status === "running"
               ? "The analysis is running (usually 1-3 minutes); the page updates live."
-              : `The analysis could not start: ${record.error}`;
+              : "Not analysed yet; the user can start the analysis from the review page.";
         return `Opened "${pr.title}" in PR X-ray. ${state}\nReview page: [${ref.owner}/${ref.repo}#${ref.number}](${reviewLink(ref)})`;
       } catch (error) {
         const message = error instanceof GithubError ? error.message : String(error);
@@ -325,7 +324,7 @@ export default async function plugin(bb: BbPluginApi) {
       summary: "PR X-ray: grouped, visual PR self-review and the comments it records",
       commands: {
         review: cliCommand({
-          summary: "Open a PR in PR X-ray and start its analysis",
+          summary: "Open a PR in PR X-ray",
           positionals: [{ name: "url", description: "GitHub PR URL or owner/repo#123", required: true }],
           options: { json: { type: "boolean", description: "Emit JSON" } },
           async run(input) {
@@ -337,10 +336,10 @@ export default async function plugin(bb: BbPluginApi) {
               });
             }
             const { pr, analysis: record } = await openReview(ref);
-            const value = { title: pr.title, analysis: record.status, link: reviewLink(ref) };
+            const value = { title: pr.title, analysis: record?.status ?? "none", link: reviewLink(ref) };
             return {
               exitCode: 0,
-              stdout: input.options.json ? JSON.stringify(value) : `${pr.title}\nanalysis: ${record.status}\n${value.link}`,
+              stdout: input.options.json ? JSON.stringify(value) : `${pr.title}\nanalysis: ${value.analysis}\n${value.link}`,
             };
           },
         }),
