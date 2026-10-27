@@ -680,6 +680,17 @@ const SEPARATOR_CSS = `
 }
 `;
 
+/**
+ * Softer added/removed backgrounds than the @pierre/diffs defaults, which
+ * stack line + word tints so dim tokens (comments) become unreadable.
+ */
+const SOFT_CHANGE_BG = Object.fromEntries(
+  (["addition", "deletion"] as const).flatMap((kind) => [
+    [`--diffs-bg-${kind}-override`, `light-dark(color-mix(in lab, var(--diffs-bg) 93%, var(--diffs-${kind}-base)), color-mix(in lab, var(--diffs-bg) 90%, var(--diffs-${kind}-base)))`],
+    [`--diffs-bg-${kind}-emphasis-override`, `light-dark(rgb(from var(--diffs-${kind}-base) r g b / .12), rgb(from var(--diffs-${kind}-base) r g b / .12))`],
+  ]),
+);
+
 function HunkDiff({
   hunk,
   file,
@@ -829,7 +840,7 @@ function HunkDiff({
       id={`hunk-${hunk.id}`}
       onPointerDown={onActivate}
       className={cn("scroll-mt-12 border-b border-dashed border-border last:border-b-0", active && "ring-1 ring-inset ring-ring")}
-      style={{ "--diffs-font-size": "12px", "--diffs-line-height": "18px" } as React.CSSProperties}
+      style={{ "--diffs-font-size": "12px", "--diffs-line-height": "18px", ...SOFT_CHANGE_BG } as React.CSSProperties}
     >
       <PatchDiff<AnnotationItem[]>
         patch={patch}
