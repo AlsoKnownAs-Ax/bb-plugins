@@ -158,10 +158,17 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
             {view === "unified" ? "Split" : "Unified"}
           </Button>
         ) : null}
-        <Button size="sm" variant="ghost" onClick={() => void reanalyse()} disabled={running} aria-label="Run the analysis again">
-          <Icon name="RotateCcw" className={cn(running && "animate-spin")} />
-          {running ? "Analysing…" : "Re-analyse"}
-        </Button>
+        {current || analysis ? (
+          <Button size="sm" variant="ghost" onClick={() => void reanalyse()} disabled={running} aria-label="Run the analysis again">
+            <Icon name="RotateCcw" className={cn(running && "animate-spin")} />
+            {running ? "Analysing…" : "Re-analyse"}
+          </Button>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={() => void reanalyse()} aria-label="Analyse this PR">
+            <Icon name="Sparkles" />
+            Analyse
+          </Button>
+        )}
         {analysis?.workerThreadId ? (
           <Button size="sm" variant="ghost" onClick={() => navigate.toThread(analysis.workerThreadId!)} aria-label="Open the agent run behind this analysis">
             <Icon name="Bot" />
