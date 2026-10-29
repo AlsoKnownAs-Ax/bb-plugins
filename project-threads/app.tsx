@@ -36,7 +36,7 @@ import { cn } from "@/lib/utils";
 import { PROJECT_EMOJIS } from "@/lib/project-emojis";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { DEFAULT_WORKSPACE_ID } from "@/lib/workspaces";
+import { DEFAULT_WORKSPACE_ID, personalThreadWorkspaceId } from "@/lib/workspaces";
 
 type Workspace = WorkspacesView["workspaces"][number];
 
@@ -572,6 +572,7 @@ function ProjectThreadList({
     typeof maxSetting === "number" ? maxSetting : DEFAULT_MAX_THREADS;
   const { rpc, view, apply } = useWorkspaces();
   const workspace = shownWorkspace(useWorkspacesEnabled(), view);
+  const personalThreadWorkspaceIds = view?.personalThreadWorkspaceIds;
 
   // Runs with workspaces off too, so projects made meanwhile still land in
   // the active workspace rather than nowhere.
@@ -595,10 +596,19 @@ function ProjectThreadList({
       projects.map((p) => [p.id, withEmoji(emojis[p.id], p.name)]),
     );
     const members = workspace && new Set(workspace.projectIds);
+    const personalId = projects.find(({ isPersonal }) => isPersonal)?.id;
     const working: { thread: PluginSidebarThread; busy: boolean }[] = [];
     const byProject = new Map<string, PluginSidebarThread[]>();
     for (const thread of threads) {
       if (thread.isHidden || thread.isArchived) continue;
+      // Each workspace has its own Personal threads.
+      if (
+        workspace &&
+        thread.projectId === personalId &&
+        personalThreadWorkspaceId(personalThreadWorkspaceIds, thread.id) !== workspace.id
+      ) {
+        continue;
+      }
       const busy = isBusy(thread);
       if (busy || entries.has(thread.id)) {
         if (members && !members.has(thread.projectId)) continue;
@@ -617,7 +627,7 @@ function ProjectThreadList({
       return bt - at;
     });
     return { working, byProject, projectNames };
-  }, [threads, projects, entries, emojis, workspace]);
+  }, [threads, projects, entries, emojis, workspace, personalThreadWorkspaceIds]);
 
   if (status === "loading") {
     return (
@@ -1015,8 +1025,8 @@ function WorkspaceRow({
     return (
       <div role="alertdialog" aria-label={`Delete ${workspace.name}`} className="rounded-md px-2 py-1.5 text-sm">
         <p>
-          Delete "{workspace.name}"? Projects only in this workspace won't be in
-          any workspace.
+          Delete "{workspace.name}"? Its Personal threads won't show in any
+          workspace, and projects only in this workspace won't be in any.
         </p>
         <div className="mt-1.5 flex justify-end gap-1">
           <button type="button" onClick={() => setMode("idle")} className={cn(ghostButton, "h-7 px-2")}>

@@ -11,8 +11,10 @@ import { PROJECT_EMOJIS } from "./lib/project-emojis";
 import {
   addProject,
   adoptProjects,
+  assignPersonalThread,
   createWorkspace,
   deleteWorkspace,
+  forgetPersonalThread,
   initialWorkspacesState,
   moveProject,
   removeProject,
@@ -28,6 +30,7 @@ const workspacesViewSchema = z.object({
     z.object({ id: z.string(), name: z.string(), projectIds: z.array(z.string()) }),
   ),
   activeId: z.string(),
+  personalThreadWorkspaceIds: z.record(z.string(), z.string()),
 });
 export type WorkspacesView = z.infer<typeof workspacesViewSchema>;
 
@@ -165,7 +168,11 @@ export default async function plugin(bb: BbPluginApi) {
         bb.realtime.publish(WORKSPACES_CHANGED, {});
       }
 
-      return { workspaces: state.workspaces, activeId: state.activeId };
+      return {
+        workspaces: state.workspaces,
+        activeId: state.activeId,
+        personalThreadWorkspaceIds: state.personalThreadWorkspaceIds ?? {},
+      };
     });
     queue = run.catch(() => undefined);
     return run;
@@ -212,29 +219,31 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.archived", ({ thread }) => {
     return remove(thread.id).then(() => undefined);
   });
-  bb.events.on("thread.deleted", ({ thread }) => {
-    return remove(thread.id).then(() => undefined);
+  bb.events.on("thread.deleted", async ({ thread }) => {
+    await remove(thread.id);
+    await mutateWorkspaces((state) => forgetPersonalThread(state, thread.id));
   });
-  // Starting a thread yourself brings its project into the active workspace.
-  // Child, hidden and plugin-made threads are agents' work, so they don't.
   bb.events.on("thread.created", async ({ thread }) => {
-    if (
-      thread.parentThreadId !== null ||
-      thread.visibility === "hidden" ||
-      thread.originPluginId !== null
-    ) {
-      return;
-    }
-
     const { workspacesEnabled } = await settings.get();
 
-    if (!workspacesEnabled) {
-      return;
-    }
+    await mutateWorkspaces((state) => {
+      const personalChanged =
+        thread.projectId === state.personalProjectId &&
+        assignPersonalThread(state, thread.id, thread.parentThreadId, workspacesEnabled);
 
-    await mutateWorkspaces((state) =>
-      addProject(state, state.activeId, thread.projectId),
-    );
+      // Starting a thread yourself brings its project into the active workspace.
+      // Child, hidden and plugin-made threads are agents' work, so they don't.
+      if (
+        !workspacesEnabled ||
+        thread.parentThreadId !== null ||
+        thread.visibility === "hidden" ||
+        thread.originPluginId !== null
+      ) {
+        return personalChanged;
+      }
+
+      return addProject(state, state.activeId, thread.projectId) || personalChanged;
+    });
   });
 
   // Events aren't replayed while the plugin is unloaded: reconcile once so

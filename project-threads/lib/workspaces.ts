@@ -15,6 +15,13 @@ export type WorkspacesState = {
   /** Projects already placed once, so a project removed everywhere stays out. */
   seenProjectIds: string[];
   personalProjectId?: string;
+  /**
+   * Thread id → workspace id for Personal threads, so each workspace has its
+   * own Personal. Unlisted threads are in Default.
+   * shortcut: lives in one kv value (256 KB, roughly 2,500 threads); move to
+   * thread plugin metadata if Personal gets that busy.
+   */
+  personalThreadWorkspaceIds?: Record<string, string>;
 };
 
 export const DEFAULT_WORKSPACE_ID = "default";
@@ -32,6 +39,52 @@ export function activeWorkspace(state: WorkspacesState): Workspace {
     state.workspaces.find((workspace) => workspace.id === state.activeId) ??
     state.workspaces[0]
   );
+}
+
+export function personalThreadWorkspaceId(
+  personalThreadWorkspaceIds: Readonly<Record<string, string>> | undefined,
+  threadId: string,
+): string {
+  return personalThreadWorkspaceIds?.[threadId] ?? DEFAULT_WORKSPACE_ID;
+}
+
+/**
+ * Files a new Personal thread: a child goes where its parent is, a top-level
+ * thread goes to the active workspace while workspaces are on, else Default.
+ */
+export function assignPersonalThread(
+  state: WorkspacesState,
+  threadId: string,
+  parentThreadId: string | null,
+  workspacesEnabled: boolean,
+): boolean {
+  const workspaceId = newPersonalThreadWorkspaceId(
+    state,
+    parentThreadId,
+    workspacesEnabled,
+  );
+
+  if (workspaceId === DEFAULT_WORKSPACE_ID) {
+    return false;
+  }
+
+  state.personalThreadWorkspaceIds = {
+    ...state.personalThreadWorkspaceIds,
+    [threadId]: workspaceId,
+  };
+  return true;
+}
+
+export function forgetPersonalThread(
+  state: WorkspacesState,
+  threadId: string,
+): boolean {
+  if (state.personalThreadWorkspaceIds?.[threadId] === undefined) {
+    return false;
+  }
+
+  delete state.personalThreadWorkspaceIds[threadId];
+  return true;
 }
 
 /** Puts projects never seen before into the active workspace, Personal first. */
@@ -150,7 +203,10 @@ export function renameWorkspace(
   return true;
 }
 
-/** Deletes any workspace but Default; deleting the active one switches to Default. */
+/**
+ * Deletes any workspace but Default; deleting the active one switches to
+ * Default. Its Personal threads keep pointing at it, so they show nowhere.
+ */
 export function deleteWorkspace(state: WorkspacesState, id: string): boolean {
   if (id === DEFAULT_WORKSPACE_ID) {
     return false;
@@ -180,6 +236,22 @@ export function switchWorkspace(state: WorkspacesState, id: string): boolean {
 
   state.activeId = id;
   return true;
+}
+
+function newPersonalThreadWorkspaceId(
+  state: WorkspacesState,
+  parentThreadId: string | null,
+  workspacesEnabled: boolean,
+): string {
+  if (parentThreadId !== null) {
+    return personalThreadWorkspaceId(state.personalThreadWorkspaceIds, parentThreadId);
+  }
+
+  if (!workspacesEnabled) {
+    return DEFAULT_WORKSPACE_ID;
+  }
+
+  return state.activeId;
 }
 
 const MOVE_OFFSET = { up: -1, down: 1 } satisfies Record<"up" | "down", number>;

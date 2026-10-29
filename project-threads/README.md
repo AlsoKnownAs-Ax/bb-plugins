@@ -19,7 +19,8 @@ Replaces bb's sidebar thread list:
   or delete workspaces from the **Workspaces** button in the sidebar footer
   (or click the workspace name at the top of the list). Each project header's
   "…" menu picks its workspaces and moves it up or down. New projects, and
-  projects you start a thread in, join the active workspace.
+  projects you start a thread in, join the active workspace. Each workspace
+  has its own Personal threads: a new one starts with an empty Personal.
 
 If another thread list is active, pick this one under
 Settings → Appearance → Sidebar.
