@@ -12,6 +12,14 @@ Replaces bb's sidebar thread list:
   (0 shows all).
 - **Project emojis** — on the plugin's settings page, pick an emoji per
   project from a dropdown; it shows before the project name in the sidebar.
+- **Workspaces** — off by default; turn on **Enable workspaces** in the
+  plugin's settings. A workspace is a named group of projects, and a project
+  can be in any number of them. The sidebar shows only the active
+  workspace's projects, in that workspace's own order. Switch, create, rename
+  or delete workspaces from the **Workspaces** button in the sidebar footer
+  (or click the workspace name at the top of the list). Each project header's
+  "…" menu picks its workspaces and moves it up or down. New projects, and
+  projects you start a thread in, join the active workspace.
 
 If another thread list is active, pick this one under
 Settings → Appearance → Sidebar.
