@@ -8,6 +8,8 @@ import { Icon } from "@/components/ui/icon";
 import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { PrRef } from "../shared/schema";
+import { useAgentConfirmContext } from "./agent-confirm";
+import { AgentDeclined } from "./agent-trust";
 import { errorMessage, type Rpc } from "./useReview";
 
 const SUGGESTIONS = [
@@ -20,10 +22,13 @@ const SUGGESTIONS = [
 export function ChatBubble({
   rpc,
   prRef,
+  onAsk,
   openRequest,
 }: {
   rpc: Rpc;
   prRef: PrRef;
+  /** Starts the chat, or rejects if the user declines. Opens on the thread through openRequest. */
+  onAsk: (question: string) => Promise<void>;
   /** Set after a question was asked from elsewhere (the diff): open on that thread. */
   openRequest: { threadId: string; nonce: number } | null;
 }) {
@@ -31,6 +36,7 @@ export function ChatBubble({
   // undefined: not loaded yet; null: no chat for this PR yet.
   const [threadId, setThreadId] = useState<string | null | undefined>(undefined);
   const [focusRequest, setFocusRequest] = useState(0);
+  const { confirmAgent } = useAgentConfirmContext();
 
   useEffect(() => {
     if (!openRequest) return;
@@ -48,6 +54,14 @@ export function ChatBubble({
       },
     );
   }, [open, threadId, rpc, prRef]);
+
+  // Others may have commented since the chat began, and opening it adds their text to its context.
+  useEffect(() => {
+    if (!open || !threadId) return;
+    void confirmAgent("chat").then((accepted) => {
+      if (!accepted) setOpen(false);
+    });
+  }, [open, threadId, confirmAgent]);
 
   useEffect(() => {
     if (open) setFocusRequest(Date.now());
@@ -93,8 +107,7 @@ export function ChatBubble({
               <FirstQuestion
                 focusRequest={focusRequest}
                 onAsk={async (question) => {
-                  const result = await rpc.call("chat.start", { ref: prRef, question });
-                  setThreadId(result.threadId);
+                  await onAsk(question);
                   setFocusRequest(Date.now());
                 }}
               />
@@ -132,7 +145,7 @@ function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (
     try {
       await onAsk(text);
     } catch (cause) {
-      toast.error(errorMessage(cause));
+      if (!(cause instanceof AgentDeclined)) toast.error(errorMessage(cause));
       setSending(false);
     }
   };
@@ -141,7 +154,8 @@ function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (
     <div className="flex h-full flex-col gap-3 p-3">
       <p className="text-sm text-muted-foreground">
         Ask anything about this pull request. The agent has read its description, diff, review threads and the PR X-ray
-        analysis. It only reads; it never changes code or posts to GitHub.
+        analysis. It is told to only read, not to change code or post to GitHub, but that is an instruction and not a
+        security limit.
       </p>
       <div className="flex flex-col gap-1.5">
         {SUGGESTIONS.map((suggestion) => (

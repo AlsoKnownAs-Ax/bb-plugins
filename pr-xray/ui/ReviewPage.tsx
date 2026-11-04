@@ -1,5 +1,5 @@
 // One PR's review: header, analysis status, Diff/Explain tabs, focus mode.
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
@@ -9,23 +9,48 @@ import { Input } from "@/components/ui/input";
 import { usePortalScopeProps } from "@/lib/portal-scope";
 import { cn } from "@/lib/utils";
 import type { PrRef } from "../shared/schema";
+import { AgentConfirmProvider, useAgentConfirm } from "./agent-confirm";
+import { AgentDeclined } from "./agent-trust";
 import { ChatBubble } from "./ChatBubble";
-import { DiffTab, displayGroups, type ViewMode } from "./DiffTab";
+import { DiffTab, type ViewMode } from "./DiffTab";
+import { displayGroups } from "./diff-utils";
 import { ExplainTab } from "./ExplainTab";
 import { uiStore } from "./store";
 import { errorMessage, useReview } from "./useReview";
 
 type Tab = "diff" | "explain";
 
+const PAGE_FRAME_CLASS = "relative flex h-full min-h-0 flex-1 flex-col";
+
 function FocusFrame({ focus, children }: { focus: boolean; children: ReactNode }) {
   const scope = usePortalScopeProps();
-  if (!focus) return <div className="relative flex h-full min-h-0 flex-1 flex-col">{children}</div>;
-  // One layer below bb's toaster (z-index 49), so toasts stay visible in focus mode.
-  return createPortal(
-    <div {...scope} className="fixed inset-0 z-[48] flex flex-col bg-background text-foreground">
-      {children}
-    </div>,
-    document.body,
+  const slot = useRef<HTMLDivElement>(null);
+  // One element that moves between the page and document.body. React sees the same tree
+  // either way, so toggling focus keeps state such as a half-written comment.
+  const [frame] = useState(() => {
+    const element = document.createElement("div");
+    element.style.display = "contents";
+    return element;
+  });
+  useLayoutEffect(() => {
+    // Moving a node resets its scroll position and focus, so put them back.
+    const active = document.activeElement;
+    const scrolled = Array.from(frame.querySelectorAll("*")).filter((element) => element.scrollTop > 0).map((element) => [element, element.scrollTop] as const);
+    (focus ? document.body : slot.current)?.append(frame);
+    for (const [element, top] of scrolled) element.scrollTop = top;
+    if (active instanceof HTMLElement && frame.contains(active)) active.focus();
+  }, [focus, frame]);
+  useLayoutEffect(() => () => frame.remove(), [frame]);
+  return (
+    <div ref={slot} className={PAGE_FRAME_CLASS}>
+      {createPortal(
+        // One layer below bb's toaster (z-index 49), so toasts stay visible in focus mode.
+        <div {...scope} className={focus ? "fixed inset-0 z-[48] flex flex-col bg-background text-foreground" : PAGE_FRAME_CLASS}>
+          {children}
+        </div>,
+        frame,
+      )}
+    </div>
   );
 }
 
@@ -87,15 +112,21 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
     [prRef, rpc],
   );
 
+  const { confirmAgent, confirmOthersComments, dialog: agentDialog } = useAgentConfirm(prRef, data?.pr ?? null);
+  const agentConfirm = useMemo(() => ({ confirmAgent, confirmOthersComments }), [confirmAgent, confirmOthersComments]);
+
   const askChat = useCallback(
     async (question: string) => {
+      // Throwing keeps the question in its text box.
+      if (!(await confirmAgent("chat"))) throw new AgentDeclined();
       const { threadId } = await rpc.call("chat.start", { ref: prRef, question });
       setChatRequest({ threadId, nonce: Date.now() });
     },
-    [prRef, rpc],
+    [confirmAgent, prRef, rpc],
   );
 
   const reanalyse = async () => {
+    if (!(await confirmAgent("analysis"))) return;
     try {
       await rpc.call("analysis.start", { ref: prRef });
       refetch();
@@ -129,6 +160,7 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
 
   return (
     <FocusFrame focus={focus}>
+      <AgentConfirmProvider value={agentConfirm}>
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -146,7 +178,7 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
           <h1 className="truncate text-base font-semibold">{pr.title}</h1>
         </div>
         <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
-          {(["diff", "explain"] as const).map((value, index) => (
+          {(["diff", "explain"] as const).map((value) => (
             <Button key={value} size="sm" variant="ghost" aria-pressed={tab === value} onClick={() => setTab(value)}>
               <Icon name={value === "diff" ? "FileDiff" : "Workflow"} />
               {value === "diff" ? "Diff" : "Explain"}
@@ -253,7 +285,9 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
           <div className="p-6 text-sm text-muted-foreground">No analysis yet.</div>
         )}
       </div>
-      <ChatBubble rpc={rpc} prRef={prRef} openRequest={chatRequest} />
+      <ChatBubble rpc={rpc} prRef={prRef} onAsk={askChat} openRequest={chatRequest} />
+      {agentDialog}
+      </AgentConfirmProvider>
     </FocusFrame>
   );
 }

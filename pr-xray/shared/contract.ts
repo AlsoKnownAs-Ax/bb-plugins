@@ -5,6 +5,8 @@ import {
   analysisRecordSchema,
   commentTagSchema,
   draftCommentSchema,
+  fixScopeSchema,
+  modelPurposeSchema,
   modelSelectionSchema,
   pendingCommentSchema,
   prDetailsSchema,
@@ -72,7 +74,11 @@ export const rpcContract = defineRpcContract({
     output: pendingCommentSchema,
   },
   "comment.pendingUpdate": {
-    input: z.object({ ref: prRefSchema, id: z.string(), body: z.string().trim().min(1) }),
+    input: z.object({ ref: prRefSchema, id: z.string(), body: draftCommentSchema.shape.body }),
+    output: ok,
+  },
+  "comment.pendingKeep": {
+    input: z.object({ ref: prRefSchema, id: z.string(), headSha: z.string() }),
     output: ok,
   },
   "comment.pendingRemove": {
@@ -136,11 +142,11 @@ export const rpcContract = defineRpcContract({
     output: ok,
   },
   "fix.thread": {
-    input: z.object({ ref: prRefSchema, threadId: z.string() }),
+    input: z.object({ ref: prRefSchema, threadId: z.string(), scope: fixScopeSchema }),
     output: threadOut,
   },
   "fix.allDiff": {
-    input: z.object({ ref: prRefSchema }),
+    input: z.object({ ref: prRefSchema, scope: fixScopeSchema }),
     output: threadOut,
   },
   "fix.allDiagram": {
@@ -164,12 +170,12 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       identity: z.object({ login: z.string(), source: z.enum(["token", "gh"]) }).nullable(),
       identityError: z.string().nullable(),
-      model: modelSelectionSchema.nullable(),
-      recommended: modelSelectionSchema.nullable(),
+      models: z.object({ analysis: modelSelectionSchema.nullable(), tagging: modelSelectionSchema.nullable() }),
+      pickerSeed: modelSelectionSchema.nullable(),
     }),
   },
   "settings.setModel": {
-    input: z.object({ selection: modelSelectionSchema.nullable() }),
+    input: z.object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() }),
     output: ok,
   },
 });

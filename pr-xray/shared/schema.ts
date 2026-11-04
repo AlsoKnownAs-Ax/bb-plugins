@@ -158,6 +158,8 @@ export const prDetailsSchema = z.object({
   draft: z.boolean(),
   headSha: z.string(),
   headRef: z.string(),
+  /** False for a fork, or when the head repository was deleted. */
+  headInBaseRepo: z.boolean(),
   baseRef: z.string(),
   viewer: z.string(),
   isOwnPr: z.boolean(),
@@ -176,6 +178,8 @@ export const analysisRecordSchema = z.object({
   status: z.enum(["running", "done", "failed"]),
   error: z.string().nullable(),
   result: analysisResultSchema.nullable(),
+  /** Hunk id -> content fingerprint when analysed. Null for analyses from before this was saved. */
+  hunkFingerprints: z.record(z.string(), z.string()).nullable(),
   workerThreadId: z.string().nullable(),
   diffOnly: z.boolean(),
   ticketUrl: z.string().nullable(),
@@ -190,6 +194,8 @@ export const diffSideSchema = z.enum(["LEFT", "RIGHT"]);
 export type DiffSide = z.infer<typeof diffSideSchema>;
 
 export const draftCommentSchema = z.object({
+  /** The commit this comment was written on; its line numbers only hold there. */
+  headSha: z.string(),
   path: z.string(),
   line: z.number().int().positive(),
   side: diffSideSchema,
@@ -228,6 +234,9 @@ export const storedCommentSchema = z.object({
 });
 export type StoredComment = z.infer<typeof storedCommentSchema>;
 
+export const fixScopeSchema = z.enum(["mine", "all"]);
+export type FixScope = z.infer<typeof fixScopeSchema>;
+
 export const modelSelectionSchema = z.object({
   providerId: z.string(),
   model: z.string(),
@@ -235,6 +244,9 @@ export const modelSelectionSchema = z.object({
   serviceTier: z.string().optional(),
 });
 export type ModelSelection = z.infer<typeof modelSelectionSchema>;
+
+export const modelPurposeSchema = z.enum(["analysis", "tagging"]);
+export type ModelPurpose = z.infer<typeof modelPurposeSchema>;
 
 export const reviewSummarySchema = z.object({
   ref: prRefSchema,

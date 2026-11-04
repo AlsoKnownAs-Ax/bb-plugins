@@ -16,15 +16,19 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Icon } from "@/components/ui/icon";
 import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { DraftComment, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
+import { threadsToFix } from "../shared/fix-scope";
+import type { DraftComment, FixScope, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
+import { useAgentConfirmContext } from "./agent-confirm";
 import { Composer, PendingView, ThreadView } from "./comments";
 import { prRefKey } from "../shared/pr-ref";
-import { firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
+import { canKeepDraft, draftInDiff, firstChangedLine, hunkFileDiff, hunkRange, sideLines, threadVisibleIn } from "./diff-utils";
 import { errorMessage, type ReviewGet, type Rpc } from "./useReview";
 
 export type ViewMode = "unified" | "split";
 
 interface DraftTarget {
+  /** The commit on screen when the line was picked: the line number only holds there. */
+  headSha: string;
   hunkId: string;
   path: string;
   range: SelectedLineRange;
@@ -47,34 +51,6 @@ const fileKey = (groupId: string, path: string) => `file:${groupId}:${path}`;
 
 const toSide = (side: SelectedLineRange["side"]): "LEFT" | "RIGHT" => (side === "deletions" ? "LEFT" : "RIGHT");
 const toAnnotationSide = (side: "LEFT" | "RIGHT") => (side === "LEFT" ? "deletions" : "additions");
-
-/** Groups from the analysis, or one group per file while it is not ready. */
-export function displayGroups(data: ReviewGet): ReviewGroup[] {
-  const result = data.completed?.result;
-  if (result && data.completed?.headSha === data.pr.headSha) return result.groups;
-  if (result) {
-    // Older analysis: keep its groups for hunks that still exist, add the rest per file.
-    const known = new Set(data.pr.hunks.map((hunk) => hunk.id));
-    const groups = result.groups
-      .map((group) => ({ ...group, hunkIds: group.hunkIds.filter((id) => known.has(id)) }))
-      .filter((group) => group.hunkIds.length > 0);
-    const covered = new Set(groups.flatMap((group) => group.hunkIds));
-    const rest = data.pr.hunks.filter((hunk) => !covered.has(hunk.id)).map((hunk) => hunk.id);
-    if (rest.length > 0) {
-      groups.push({ id: "__new", title: "Changed since the analysis", why: "Hunks the last analysis did not see.", kind: "core", hunkIds: rest });
-    }
-    return groups;
-  }
-  return data.pr.files
-    .filter((file) => file.hunkIds.length > 0)
-    .map((file) => ({
-      id: `file-${file.index}`,
-      title: file.path,
-      why: "Analysis not ready yet; showing the diff by file.",
-      kind: "core" as const,
-      hunkIds: file.hunkIds,
-    }));
-}
 
 export function DiffTab({
   data,
@@ -113,6 +89,7 @@ export function DiffTab({
   }, [data.comments]);
   const [draft, setDraft] = useState<DraftTarget | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
+  const { confirmAgent, confirmOthersComments } = useAgentConfirmContext();
   const [fullFile, setFullFile] = useState<{ file: PrFile; content: string | null; loading: boolean } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeHunk, setActiveHunk] = useState<string | null>(null);
@@ -267,7 +244,7 @@ export function DiffTab({
         const file = hunk ? files.get(hunk.fileIndex) : undefined;
         if (hunk && file) {
           const at = firstChangedLine(hunk);
-          setDraft({ hunkId: hunk.id, path: file.path, range: { start: at.line, end: at.line, side: toAnnotationSide(at.side) } });
+          setDraft({ headSha: pr.headSha, hunkId: hunk.id, path: file.path, range: { start: at.line, end: at.line, side: toAnnotationSide(at.side) } });
           event.preventDefault();
         }
       }
@@ -287,12 +264,15 @@ export function DiffTab({
     return ids;
   }, [hunks, pr.files, pr.threads]);
   const otherThreads = pr.threads.filter((thread) => !anchoredThreadIds.has(thread.id));
+  const hunksOfPath = (path: string) => pr.files.find((file) => file.path === path)?.hunkIds.flatMap((id) => hunks.get(id) ?? []) ?? [];
+  const looseDrafts = data.pending.filter((comment) => !draftInDiff(comment, pr.headSha, hunksOfPath(comment.path)));
 
   const draftToComment = (target: DraftTarget, body: string): DraftComment => {
     const side = toSide(target.range.endSide ?? target.range.side);
     const start = Math.min(target.range.start, target.range.end);
     const end = Math.max(target.range.start, target.range.end);
     return {
+      headSha: target.headSha,
       path: target.path,
       line: end,
       side,
@@ -313,11 +293,12 @@ export function DiffTab({
     }
   };
 
-  const fixAll = async () => {
+  const fixComments = async (scope: FixScope) => {
+    if (!(await (scope === "mine" ? confirmAgent("fix") : confirmOthersComments()))) return;
     try {
-      const { threadId } = await rpc.call("fix.allDiff", { ref: pr.ref });
+      const { threadId } = await rpc.call("fix.allDiff", { ref: pr.ref, scope });
       // Stay on the review; the fix runs in the background.
-      toast.success("Started a thread to fix your open comments", {
+      toast.success(scope === "mine" ? "Started a thread to fix your open comments" : "Started a thread to fix all open comments", {
         action: { label: "Open", onClick: () => navigate.toThread(threadId) },
       });
     } catch (error) {
@@ -328,9 +309,8 @@ export function DiffTab({
   const viewedCount = groups.filter((group) => viewed.has(group.id)).length;
   const firstUpdated = groups.find((group) => updatedPaths(group).length > 0);
   const updatedCount = new Set(groups.flatMap(updatedPaths)).size;
-  const myOpenThreads = pr.threads.filter(
-    (thread) => !thread.isResolved && thread.comments.some((comment) => comment.author.toLowerCase() === pr.viewer.toLowerCase()),
-  ).length;
+  const myOpenThreads = threadsToFix(pr.threads, pr.viewer, "mine").length;
+  const allOpenThreads = threadsToFix(pr.threads, pr.viewer, "all").length;
 
   return (
     <div className="flex h-full min-h-0">
@@ -383,6 +363,15 @@ export function DiffTab({
               </button>
             </div>
           ))}
+          {looseDrafts.length > 0 ? (
+            <button
+              type="button"
+              className="mt-2 w-full rounded-md px-2 py-1.5 text-left text-xs text-warning-text hover:bg-state-hover"
+              onClick={() => scrollTo("pending-to-check")}
+            >
+              {looseDrafts.length} pending comment{looseDrafts.length === 1 ? "" : "s"} to check
+            </button>
+          ) : null}
           {otherThreads.length > 0 ? (
             <button
               type="button"
@@ -398,9 +387,13 @@ export function DiffTab({
             <Icon name="Sent" />
             {data.pending.length > 0 ? `Submit review (${data.pending.length})` : "Submit review"}
           </Button>
-          <Button className="w-full" size="sm" variant="outline" disabled={myOpenThreads === 0} onClick={() => void fixAll()}>
+          <Button className="w-full" size="sm" variant="outline" disabled={myOpenThreads === 0} onClick={() => void fixComments("mine")}>
             <Icon name="Bot" />
-            Fix all open comments{myOpenThreads ? ` (${myOpenThreads})` : ""}
+            Fix my open comments{myOpenThreads ? ` (${myOpenThreads})` : ""}
+          </Button>
+          <Button className="w-full" size="sm" variant="outline" disabled={allOpenThreads === 0} onClick={() => void fixComments("all")}>
+            <Icon name="Bot" />
+            Fix all open comments{allOpenThreads ? ` (${allOpenThreads})` : ""}
           </Button>
           <p className="text-[11px] text-muted-foreground">j/k hunks · n/p groups · c comment</p>
         </div>
@@ -470,6 +463,29 @@ export function DiffTab({
             </section>
             );
           })}
+          {looseDrafts.length > 0 ? (
+            <section id="pending-to-check" className="space-y-2">
+              <h2 className="text-base font-semibold">Pending comments to check</h2>
+              <p className="text-sm text-muted-foreground">These can't be posted as they are, because they were written on an older commit or their line left the diff.</p>
+              {looseDrafts.map((comment) => {
+                const canKeep = canKeepDraft(comment, pr.headSha, hunksOfPath(comment.path));
+                return (
+                  <div key={comment.id}>
+                    <div className="font-mono text-xs text-muted-foreground">
+                      {comment.path}:{comment.line}
+                    </div>
+                    <PendingView
+                      rpc={rpc}
+                      prRef={pr.ref}
+                      comment={comment}
+                      keepOnSha={canKeep ? pr.headSha : null}
+                      note={canKeep ? "Check that this line is still right, then keep it." : "This line left the diff. Copy the text if you need it, then delete it."}
+                    />
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
           {otherThreads.length > 0 ? (
             <section id="other-threads" className="space-y-2">
               <h2 className="text-base font-semibold">Conversations outside the diff</h2>
@@ -487,7 +503,7 @@ export function DiffTab({
         </div>
       </div>
 
-      <SubmitReviewDialog open={submitOpen} onOpenChange={setSubmitOpen} data={data} rpc={rpc} />
+      <SubmitReviewDialog open={submitOpen} onOpenChange={setSubmitOpen} data={data} rpc={rpc} blockedDrafts={looseDrafts.length} />
       <Dialog open={fullFile !== null} onOpenChange={(open) => !open && setFullFile(null)}>
         <DialogContent className="max-h-[85vh] max-w-5xl overflow-hidden">
           <DialogHeader>
@@ -564,7 +580,7 @@ function GroupHunks({
         const open = isFileOpen(file.path);
         const comments =
           data.pr.threads.filter((thread) => !thread.isResolved && threadVisibleIn(thread, file.path, fileHunks)).length +
-          data.pending.filter((comment) => comment.path === file.path && lineInHunks(fileHunks, comment.side, comment.line)).length;
+          data.pending.filter((comment) => comment.path === file.path && draftInDiff(comment, data.pr.headSha, fileHunks)).length;
         return (
           <div key={fileIndex} id={`file-${fileKey(group.id, file.path)}`} className="scroll-mt-0 rounded-lg border border-border">
             {/* Sticky so Viewed stays reachable while scrolling a long file. */}
@@ -788,7 +804,7 @@ function HunkDiff({
       if (threadVisibleIn(thread, file.path, [hunk])) add(thread.side, thread.line!, { kind: "thread", thread });
     }
     for (const comment of data.pending) {
-      if (comment.path === file.path && lineInHunks([hunk], comment.side, comment.line)) add(comment.side, comment.line, { kind: "pending", comment });
+      if (comment.path === file.path && draftInDiff(comment, pr.headSha, [hunk])) add(comment.side, comment.line, { kind: "pending", comment });
     }
     if (draft) {
       const side = toSide(draft.range.endSide ?? draft.range.side);
@@ -821,10 +837,10 @@ function HunkDiff({
         const current = selectionRef.current;
         const useSelection =
           current !== null && range.start >= Math.min(current.start, current.end) && range.start <= Math.max(current.start, current.end);
-        setDraft({ hunkId: hunk.id, path: file.path, range: useSelection ? current : range });
+        setDraft({ headSha: pr.headSha, hunkId: hunk.id, path: file.path, range: useSelection ? current : range });
       },
     }),
-    [codeTheme.mode, codeTheme.name, file.path, hunk.id, setDraft, view],
+    [codeTheme.mode, codeTheme.name, file.path, hunk.id, pr.headSha, setDraft, view],
   );
 
   const renderAnnotation = useCallback(
@@ -911,11 +927,13 @@ function SubmitReviewDialog({
   onOpenChange,
   data,
   rpc,
+  blockedDrafts,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: ReviewGet;
   rpc: Rpc;
+  blockedDrafts: number;
 }) {
   const [body, setBody] = useState("");
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
@@ -924,7 +942,7 @@ function SubmitReviewDialog({
   const own = data.pr.isOwnPr;
   const submittedEvent = own ? "COMMENT" : event;
   // GitHub only accepts an empty review when it is an approval.
-  const canSubmit = submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "";
+  const canSubmit = blockedDrafts === 0 && (submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "");
   const submit = async () => {
     setBusy(true);
     try {
@@ -950,7 +968,9 @@ function SubmitReviewDialog({
           <DialogTitle>Submit review</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          {data.pending.length} pending comment{data.pending.length === 1 ? "" : "s"} will be posted to GitHub.
+          {blockedDrafts > 0
+            ? `${blockedDrafts} pending comment${blockedDrafts === 1 ? " needs" : "s need"} checking first. Keep or delete ${blockedDrafts === 1 ? "it" : "them"} under "Pending comments to check" before you submit.`
+            : `${data.pending.length} pending comment${data.pending.length === 1 ? "" : "s"} will be posted to GitHub.`}
         </p>
         <VoiceInputTextarea
           value={body}

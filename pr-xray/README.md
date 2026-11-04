@@ -4,13 +4,13 @@ Self-review GitHub pull requests before asking for review:
 
 - **Diff tab**: hunks grouped by concern and ordered as a reading path (noise last), with viewed checkmarks, split/unified view and GitHub-style inline comments: single comments, start/submit a review, suggestions, replies, editing your posted comments and resolve.
 - **Explain tab**: a summary informed by the linked Notion ticket and its parent project, a walkthrough, "where to look closely", and interactive diagrams. Click a node to leave a design comment (kept in bb only).
-- **Fix with agents**: fix one thread, fix all your open review comments, or redesign from all diagram comments (plan first, then waits for your approval). Each start shows a toast with a link to the thread.
-- **Retro feed**: tag comments yourself or click “AI tag” (Haiku); `bb pr-xray comments --json` exports them.
+- **Fix with agents**: fix one thread, fix your open review comments, fix all open comments, or redesign from all diagram comments (plan first, then waits for your approval). Each start shows a toast with a link to the thread.
+- **Retro feed**: tag comments yourself or click “AI tag”; `bb pr-xray comments --json` exports them.
 
 ## Install
 
 ```sh
-bb plugin install git:github.com/<you>/bb-plugin-pr-xray
+bb plugin install git:github.com/AlsoKnownAs-Ax/bb-plugins --subdirectory pr-xray
 ```
 
 Open it with the command palette (**PR X-ray: Review a pull request**; bind a shortcut in Settings → Keyboard), from the **PR X-ray** page in the nav rail, by asking any agent to "x-ray <PR url>", or with `bb pr-xray review <url>`.
@@ -19,8 +19,18 @@ Open it with the command palette (**PR X-ray: Review a pull request**; bind a sh
 
 - **GitHub**: uses your `gh` login by default. To use a token instead, create a fine-grained token with *Pull requests: read & write* and *Contents: read*, then set it under Settings → Plugins → PR X-ray (or `bb plugin config pr-xray set githubToken <token>`).
 - **Notion**: the analysis agent reads the ticket through your agent provider's Notion connection, so Notion must be connected for the provider you analyse with. The ticket is the first link matching *Ticket URL pattern* in the PR description (default: `notion.so` / `notion.com` links), and the parent project is followed through the *Notion parent project property* relation (default `Project`).
-- **Model**: Settings → Plugins → PR X-ray → *Analysis model*. The recommended default is Sonnet 5.5 at medium reasoning.
-- **Repository context**: when a bb project's git remote matches the PR's repository, the analysis agent reads that checkout (read-only). Otherwise the analysis uses the diff only, and the page shows a badge saying so.
+- **Models**: PR X-ray uses your bb default model unless you choose others under Settings → Plugins → PR X-ray. Analysis and chat share one setting, and AI tagging has its own.
+- **Repository context**: when a bb project's git remote matches the PR's repository, the analysis and chat agents read a disposable worktree of the PR branch, never your own checkout. bb removes it after the agent's thread is archived, and PR X-ray then deletes its local branch (only when the checkout is on the same machine as bb's server). An open chat keeps its worktree until you reset the chat. Fork PRs, and projects where the worktree can't be created, use the diff only, and analyses show a badge saying so. Fix threads also run in a worktree, so they need a bb project for the repository, and aren't available for fork PRs.
+
+## Security
+
+PR titles, descriptions, diffs and branch files are untrusted, and a malicious PR can try to prompt-inject the agents that read them. Those agents run in a disposable worktree, or with no repository, and are told to treat PR content as data and stay off the network. That instruction is not a security boundary.
+
+**With Codex, analysis and chat agents have network access.** bb's Codex workspace sandbox always allows it and PR X-ray can't turn it off, so an injected agent could reach the internet, run `gh` with your login and read files on your machine. Other providers depend on their own sandbox and approval settings, so don't treat those as a hard boundary either.
+
+Only analyse or chat about PRs whose author you trust. This matters most for PRs from people outside your team. PR X-ray asks you to confirm once per PR before an agent works on someone else's PR, or chats over other people's comments. It can't see commits or edits others made to your own PR.
+
+**Fix agents can push to the PR branch.** *Fix with agent* and *Fix my open comments* send only your own comments to the agent. *Fix all open comments* and *Include others' comments* also send everyone else's, and on a public repo anyone can post one, so they ask you to confirm every time. The agent is told when comments were left out, because a reply can make little sense without what it answers.
 
 ## `bb pr-xray comments --json`
 
@@ -41,3 +51,5 @@ npm install --include=dev
 bb plugin install .
 bb plugin dev
 ```
+
+Run `npm run check` for linting (oxlint), type checking and tests.

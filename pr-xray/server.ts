@@ -4,18 +4,19 @@ import { type BbPluginApi, PluginCliError, cliCommand, defineCli } from "@get-bb
 import { z } from "zod";
 import { rpcContract } from "./shared/contract";
 import { parsePrRef, prRefKey, prRefToSubPath, REVIEW_PANEL_PATH } from "./shared/pr-ref";
-import type { PrDetails, PrRef } from "./shared/schema";
-import { ANALYSIS_TOOL, createAnalysis, findTicketUrl } from "./server/analysis";
+import { threadsToFix } from "./shared/fix-scope";
+import type { FixScope, PrDetails, PrRef, ReviewThread } from "./shared/schema";
+import { agentTools, REVIEW_TOOL } from "./server/agent-tools";
+import { createAnalysis, findTicketUrl } from "./server/analysis";
 import { chatInstructions, createChat } from "./server/chat";
-import { COMMENTS_CHANGED, TAGS_TOOL, createComments } from "./server/comments";
-import { fixDiagramComments, fixDiffComments, fixSingleComment } from "./server/fix";
+import { createComments } from "./server/comments";
+import { fixDiagramComments, fixDiffComments } from "./server/fix";
 import { createGithub, GithubError } from "./server/github";
 import { createModels } from "./server/models";
 import { createStore } from "./server/store";
 
 export type { rpcContract };
 
-const REVIEW_TOOL = "pr_xray_review";
 const PR_CACHE_MS = 20_000;
 
 export default async function plugin(bb: BbPluginApi) {
@@ -87,6 +88,28 @@ export default async function plugin(bb: BbPluginApi) {
     return { pr, analysis: latest?.headSha === pr.headSha ? latest : null };
   }
 
+  /** These can fail because the page shows an old commit, so a failure also refreshes the page. */
+  async function showingNewCommits<T>(ref: PrRef, task: () => Promise<T>): Promise<T> {
+    try {
+      return await task();
+    } catch (error) {
+      invalidate(ref);
+      comments.publish(ref);
+      throw error;
+    }
+  }
+
+  function startFix(pr: PrDetails, threads: ReviewThread[], scope: FixScope) {
+    const tags = new Map<number, string>();
+    for (const thread of threads) {
+      for (const comment of thread.comments) {
+        const tag = store.commentByGithubId(comment.databaseId)?.tag;
+        if (tag) tags.set(comment.databaseId, tag);
+      }
+    }
+    return fixDiffComments(bb, pr, threads, tags, scope);
+  }
+
   bb.rpc.register(rpcContract, {
     async "review.get"({ ref }) {
       const pr = await loadPr(ref);
@@ -156,8 +179,12 @@ export default async function plugin(bb: BbPluginApi) {
       return pending;
     },
     "comment.pendingUpdate"({ ref, id, body }) {
-      store.updatePendingComment(id, body);
+      store.updatePendingComment(id, { body });
       comments.publish(ref);
+      return { ok: true };
+    },
+    async "comment.pendingKeep"({ ref, id, headSha }) {
+      await showingNewCommits(ref, () => comments.keepPending(ref, id, headSha));
       return { ok: true };
     },
     "comment.pendingRemove"({ ref, id }) {
@@ -166,7 +193,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true };
     },
     async "review.submit"({ ref, event, body }) {
-      const result = await comments.submitReview(ref, event, body);
+      const result = await showingNewCommits(ref, () => comments.submitReview(ref, event, body));
       invalidate(ref);
       return result;
     },
@@ -185,8 +212,8 @@ export default async function plugin(bb: BbPluginApi) {
       invalidate(ref);
       return { ok: true };
     },
-    async "comment.setTag"({ commentId, tag }) {
-      await comments.setTag(commentId, tag);
+    "comment.setTag"({ commentId, tag }) {
+      comments.setTag(commentId, tag);
       return { ok: true };
     },
     async "comment.autoTag"({ commentId }) {
@@ -220,30 +247,21 @@ export default async function plugin(bb: BbPluginApi) {
       if (existing) comments.publish(existing.ref);
       return { ok: true };
     },
-    async "fix.thread"({ ref, threadId }) {
+    async "fix.thread"({ ref, threadId, scope }) {
       const pr = await loadPr(ref, true);
       const thread = pr.threads.find((candidate) => candidate.id === threadId);
       if (!thread) throw new Error("That review thread no longer exists.");
-      const first = thread.comments[0];
-      const tag = first ? (store.commentByGithubId(first.databaseId)?.tag ?? null) : null;
-      return fixSingleComment(bb, pr, thread, tag);
+      const scoped = threadsToFix([thread], pr.viewer, scope);
+      if (scoped.length === 0) throw new Error(scope === "mine" ? "You have no unresolved comments on that thread." : "That thread is resolved.");
+      return startFix(pr, scoped, scope);
     },
-    async "fix.allDiff"({ ref }) {
+    async "fix.allDiff"({ ref, scope }) {
       const pr = await loadPr(ref, true);
-      const open = pr.threads.filter(
-        (thread) =>
-          !thread.isResolved &&
-          thread.comments.some((comment) => comment.author.toLowerCase() === pr.viewer.toLowerCase()),
-      );
-      if (open.length === 0) throw new Error("There are no unresolved review threads with your comments.");
-      const tags = new Map<number, string>();
-      for (const thread of open) {
-        for (const comment of thread.comments) {
-          const tag = store.commentByGithubId(comment.databaseId)?.tag;
-          if (tag) tags.set(comment.databaseId, tag);
-        }
+      const threads = threadsToFix(pr.threads, pr.viewer, scope);
+      if (threads.length === 0) {
+        throw new Error(scope === "mine" ? "There are no unresolved review threads with your comments." : "There are no unresolved review threads.");
       }
-      return fixDiffComments(bb, pr, open, tags);
+      return startFix(pr, threads, scope);
     },
     async "fix.allDiagram"({ ref }) {
       const pr = await loadPr(ref, true);
@@ -276,10 +294,15 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (error) {
         identityError = error instanceof Error ? error.message : String(error);
       }
-      return { identity, identityError, model: await models.stored(), recommended: await models.recommended() };
+      const [analysisModel, taggingModel, pickerSeed] = await Promise.all([
+        models.selected("analysis"),
+        models.selected("tagging"),
+        models.pickerSeed().catch(() => null),
+      ]);
+      return { identity, identityError, models: { analysis: analysisModel, tagging: taggingModel }, pickerSeed };
     },
-    async "settings.setModel"({ selection }) {
-      await models.setStored(selection);
+    async "settings.setModel"({ purpose, selection }) {
+      await models.select(purpose, selection);
       return { ok: true };
     },
   });
@@ -316,12 +339,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   // Worker tools are offered only to the workers that need them.
   bb.agents.configure((context) => {
-    const role = context.pluginMetadata.role;
-    const tools = [REVIEW_TOOL];
-    if (role === "analysis") tools.push(ANALYSIS_TOOL);
-    if (role === "tagging") tools.push(TAGS_TOOL);
     const instructions = chatInstructions(context.pluginMetadata);
-    return { tools, skills: [], ...(instructions ? { instructions } : {}) };
+    return { tools: agentTools(context.pluginMetadata.role), skills: [], ...(instructions ? { instructions } : {}) };
   });
 
   // ---- CLI -----------------------------------------------------------------------

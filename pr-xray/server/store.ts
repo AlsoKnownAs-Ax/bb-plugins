@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
   analysisResultSchema,
+  draftCommentSchema,
   type AnalysisRecord,
   type AnalysisResult,
   type CommentTag,
@@ -38,6 +39,9 @@ const MIGRATIONS = [
   // Viewed state per hunk content, so it survives new commits and re-analyses.
   `DROP TABLE viewed_groups`,
   `CREATE TABLE viewed_hunks (key TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (key, fingerprint))`,
+  `ALTER TABLE analyses ADD COLUMN hunk_fingerprints TEXT`,
+  `ALTER TABLE analyses ADD COLUMN worker_cleaned INTEGER NOT NULL DEFAULT 0`,
+  `UPDATE analyses SET worker_cleaned = 1 WHERE status != 'running'`,
 ];
 
 interface CommentRow {
@@ -71,6 +75,7 @@ interface AnalysisRow {
   status: "running" | "done" | "failed";
   error: string | null;
   result_json: string | null;
+  hunk_fingerprints: string | null;
   worker_thread_id: string | null;
   diff_only: number;
   ticket_url: string | null;
@@ -79,6 +84,12 @@ interface AnalysisRow {
 }
 
 const now = () => new Date().toISOString();
+
+/** Drafts saved before commits were recorded have no headSha; "" makes them count as written on an older commit. */
+function parseDraft(json: string): DraftComment | null {
+  const parsed = draftCommentSchema.safeParse({ headSha: "", ...JSON.parse(json) });
+  return parsed.success ? parsed.data : null;
+}
 
 function toComment(row: CommentRow): StoredComment {
   return {
@@ -115,6 +126,7 @@ function toAnalysis(row: AnalysisRow): AnalysisRecord {
     status: row.status,
     error: row.error,
     result,
+    hunkFingerprints: row.hunk_fingerprints === null ? null : (JSON.parse(row.hunk_fingerprints) as Record<string, string>),
     workerThreadId: row.worker_thread_id,
     diffOnly: row.diff_only === 1,
     ticketUrl: row.ticket_url,
@@ -172,11 +184,11 @@ export function createStore(bb: BbPluginApi) {
     },
 
     // ---- analyses ----
-    createAnalysis(input: { ref: PrRef; headSha: string; diffOnly: boolean; ticketUrl: string | null }) {
+    createAnalysis(input: { ref: PrRef; headSha: string; hunkFingerprints: Record<string, string>; diffOnly: boolean; ticketUrl: string | null }) {
       const id = `an_${randomUUID().slice(0, 12)}`;
       db.prepare(
-        `INSERT INTO analyses (id, key, owner, repo, number, head_sha, status, diff_only, ticket_url, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+        `INSERT INTO analyses (id, key, owner, repo, number, head_sha, status, hunk_fingerprints, diff_only, ticket_url, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
       ).run(
         id,
         prRefKey(input.ref),
@@ -184,6 +196,7 @@ export function createStore(bb: BbPluginApi) {
         input.ref.repo,
         input.ref.number,
         input.headSha,
+        JSON.stringify(input.hunkFingerprints),
         input.diffOnly ? 1 : 0,
         input.ticketUrl,
         now(),
@@ -191,8 +204,27 @@ export function createStore(bb: BbPluginApi) {
       return id;
     },
 
+    /** Workers of analyses that finished before `finishedBefore`, and that nothing has cleaned up yet. */
+    workersToClean(finishedBefore: string): string[] {
+      const rows = db
+        .prepare(
+          `SELECT worker_thread_id AS id FROM analyses
+           WHERE status != 'running' AND worker_cleaned = 0 AND worker_thread_id IS NOT NULL AND finished_at < ?`,
+        )
+        .all(finishedBefore) as { id: string }[];
+      return rows.map((row) => row.id);
+    },
+
+    markWorkerCleaned(threadId: string) {
+      db.prepare(`UPDATE analyses SET worker_cleaned = 1 WHERE worker_thread_id = ?`).run(threadId);
+    },
+
     setAnalysisWorker(id: string, threadId: string) {
       db.prepare(`UPDATE analyses SET worker_thread_id = ? WHERE id = ?`).run(threadId, id);
+    },
+
+    markAnalysisDiffOnly(id: string) {
+      db.prepare(`UPDATE analyses SET diff_only = 1 WHERE id = ?`).run(id);
     },
 
     completeAnalysis(id: string, result: AnalysisResult) {
@@ -270,7 +302,11 @@ export function createStore(bb: BbPluginApi) {
       const rows = db
         .prepare(`SELECT id, json, created_at FROM pending_comments WHERE key = ? ORDER BY created_at`)
         .all(prRefKey(ref)) as { id: string; json: string; created_at: string }[];
-      return rows.map((row) => ({ ...(JSON.parse(row.json) as DraftComment), id: row.id, createdAt: row.created_at }));
+      return rows.flatMap((row) => {
+        const draft = parseDraft(row.json);
+        if (draft === null) bb.log.warn(`skipping invalid pending comment ${row.id}`);
+        return draft === null ? [] : [{ ...draft, id: row.id, createdAt: row.created_at }];
+      });
     },
 
     addPendingComment(ref: PrRef, comment: DraftComment): PendingComment {
@@ -285,10 +321,11 @@ export function createStore(bb: BbPluginApi) {
       return { ...comment, id, createdAt };
     },
 
-    updatePendingComment(id: string, body: string) {
+    updatePendingComment(id: string, changes: Partial<Pick<DraftComment, "body" | "headSha">>) {
       const row = db.prepare(`SELECT json FROM pending_comments WHERE id = ?`).get(id) as { json: string } | undefined;
-      if (row === undefined) return;
-      const comment = { ...(JSON.parse(row.json) as DraftComment), body };
+      const draft = row === undefined ? null : parseDraft(row.json);
+      if (draft === null) return;
+      const comment = { ...draft, ...changes };
       db.prepare(`UPDATE pending_comments SET json = ? WHERE id = ?`).run(JSON.stringify(comment), id);
     },
 
@@ -296,8 +333,9 @@ export function createStore(bb: BbPluginApi) {
       db.prepare(`DELETE FROM pending_comments WHERE id = ?`).run(id);
     },
 
-    clearPendingComments(ref: PrRef) {
-      db.prepare(`DELETE FROM pending_comments WHERE key = ?`).run(prRefKey(ref));
+    removePendingComments(ids: string[]) {
+      const remove = db.prepare(`DELETE FROM pending_comments WHERE id = ?`);
+      for (const id of ids) remove.run(id);
     },
 
     // ---- stored comments ----

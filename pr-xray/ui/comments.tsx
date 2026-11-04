@@ -12,14 +12,18 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { isViewer } from "../shared/fix-scope";
 import { COMMENT_TAGS } from "../shared/tags";
 import type {
   CommentTag,
+  FixScope,
   PendingComment,
   PrRef,
   ReviewThread,
   StoredComment,
 } from "../shared/schema";
+import { useAgentConfirmContext } from "./agent-confirm";
+import { AgentDeclined } from "./agent-trust";
 import { errorMessage, type Rpc } from "./useReview";
 
 const MARKER = /\n*<!-- pr-xray: tag=[a-z-]+ -->\s*$/u;
@@ -32,7 +36,7 @@ export function TagChip({
 }: {
   tag: CommentTag | null;
   onChange?: (tag: CommentTag) => void;
-  /** Asks a cheap model to pick the tag; resolves once it has. */
+  /** Asks the tagging model to pick the tag; resolves once it has. */
   onAutoTag?: () => Promise<unknown>;
   className?: string;
 }) {
@@ -118,7 +122,7 @@ export function Composer({
       await run(body);
       setBody("");
     } catch (error) {
-      toast.error(errorMessage(error));
+      if (!(error instanceof AgentDeclined)) toast.error(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -202,7 +206,9 @@ export function ThreadView({
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const first = thread.comments[0];
-  const mine = thread.comments.some((comment) => comment.author.toLowerCase() === viewer.toLowerCase());
+  const mine = thread.comments.some((comment) => isViewer(comment.author, viewer));
+  const othersCommented = thread.comments.some((comment) => !isViewer(comment.author, viewer));
+  const { confirmAgent, confirmOthersComments } = useAgentConfirmContext();
 
   const resolve = async () => {
     setBusy(true);
@@ -219,10 +225,11 @@ export function ThreadView({
       setBusy(false);
     }
   };
-  const fix = async () => {
+  const fix = async (scope: FixScope) => {
+    if (!(await (scope === "mine" ? confirmAgent("fix") : confirmOthersComments()))) return;
     setBusy(true);
     try {
-      const { threadId } = await rpc.call("fix.thread", { ref: prRef, threadId: thread.id });
+      const { threadId } = await rpc.call("fix.thread", { ref: prRef, threadId: thread.id, scope });
       // Stay on the review; the fix runs in the background.
       toast.success("Started a fix thread", { action: { label: "Open", onClick: () => navigate.toThread(threadId) } });
     } catch (error) {
@@ -263,7 +270,7 @@ export function ThreadView({
         <div className="space-y-3 px-3 py-3">
           {thread.comments.map((comment) => {
             const stored = storedByGithubId.get(comment.databaseId);
-            const isViewerComment = comment.author.toLowerCase() === viewer.toLowerCase();
+            const isViewerComment = isViewer(comment.author, viewer);
             const isEditing = editingCommentId === comment.id;
             return (
               <div key={comment.id} className="space-y-1">
@@ -340,9 +347,14 @@ export function ThreadView({
                 {thread.isResolved ? "Unresolve" : "Resolve"}
               </Button>
               {mine && !thread.isResolved ? (
-                <Button size="sm" variant="ghost" onClick={() => void fix()} disabled={busy}>
+                <Button size="sm" variant="ghost" onClick={() => void fix("mine")} disabled={busy}>
                   <Icon name="Bot" />
                   Fix with agent
+                </Button>
+              ) : null}
+              {mine && othersCommented && !thread.isResolved ? (
+                <Button size="sm" variant="ghost" onClick={() => void fix("all")} disabled={busy}>
+                  Include others' comments
                 </Button>
               ) : null}
             </div>
@@ -353,7 +365,20 @@ export function ThreadView({
   );
 }
 
-export function PendingView({ rpc, prRef, comment }: { rpc: Rpc; prRef: PrRef; comment: PendingComment }) {
+export function PendingView({
+  rpc,
+  prRef,
+  comment,
+  note = "Part of your review; posted when you submit.",
+  keepOnSha = null,
+}: {
+  rpc: Rpc;
+  prRef: PrRef;
+  comment: PendingComment;
+  note?: string;
+  /** The commit the user checked this comment against, when it can move there. */
+  keepOnSha?: string | null;
+}) {
   const [editing, setEditing] = useState(false);
   if (editing) {
     return (
@@ -380,8 +405,19 @@ export function PendingView({ rpc, prRef, comment }: { rpc: Rpc; prRef: PrRef; c
     <div className="my-2 max-w-3xl rounded-lg border border-l-4 border-warning/50 border-l-warning bg-warning/5 px-3 py-2 font-sans text-sm">
       <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
         <span className="rounded border border-warning/70 px-1.5 font-medium text-warning-text">pending</span>
-        <span>Part of your review; posted when you submit.</span>
+        <span>{note}</span>
         <span className="ml-auto flex gap-1">
+          {keepOnSha !== null ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                rpc.call("comment.pendingKeep", { ref: prRef, id: comment.id, headSha: keepOnSha }).catch((error: unknown) => toast.error(errorMessage(error)));
+              }}
+            >
+              Keep on latest commit
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
             Edit
           </Button>
