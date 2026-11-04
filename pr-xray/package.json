@@ -1,6 +1,7 @@
 {
   "name": "bb-plugin-pr-xray",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "lint": "oxlint --deny-warnings --ignore-pattern 'dist/**'",

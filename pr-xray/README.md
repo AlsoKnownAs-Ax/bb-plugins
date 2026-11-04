@@ -22,6 +22,14 @@ Open it with the command palette (**PR X-ray: Review a pull request**; bind a sh
 - **Models**: PR X-ray uses your bb default model unless you choose others under Settings → Plugins → PR X-ray. Analysis and chat share one setting, and AI tagging has its own.
 - **Repository context**: when a bb project's git remote matches the PR's repository, the analysis and chat agents read a disposable worktree of the PR branch, never your own checkout. bb removes it after the agent's thread is archived, and PR X-ray then deletes its local branch. An open chat keeps its worktree until you reset the chat. Fork PRs, and projects where the worktree can't be created, use the diff only, and analyses show a badge saying so. Fix threads also run in a worktree, and aren't available for fork PRs.
 
+## Security
+
+PR titles, descriptions, diffs and branch files are untrusted, and a malicious PR can try to prompt-inject the agents that read them. Those agents run in a disposable worktree, or with no repository, and are told to treat PR content as data and stay off the network. That instruction is not a security boundary.
+
+**With Codex, analysis and chat agents have network access.** bb's Codex workspace sandbox always allows it and PR X-ray can't turn it off, so an injected agent could reach the internet, run `gh` with your login and read files on your machine. Other providers depend on their own sandbox and approval settings, so don't treat those as a hard boundary either.
+
+Only analyse or chat about PRs whose author you trust. This matters most for PRs from people outside your team.
+
 ## `bb pr-xray comments --json`
 
 ```json
