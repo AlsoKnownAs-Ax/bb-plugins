@@ -49,34 +49,6 @@ const fileKey = (groupId: string, path: string) => `file:${groupId}:${path}`;
 const toSide = (side: SelectedLineRange["side"]): "LEFT" | "RIGHT" => (side === "deletions" ? "LEFT" : "RIGHT");
 const toAnnotationSide = (side: "LEFT" | "RIGHT") => (side === "LEFT" ? "deletions" : "additions");
 
-/** Groups from the analysis, or one group per file while it is not ready. */
-export function displayGroups(data: ReviewGet): ReviewGroup[] {
-  const result = data.completed?.result;
-  if (result && data.completed?.headSha === data.pr.headSha) return result.groups;
-  if (result) {
-    // Older analysis: keep its groups for hunks that still exist, add the rest per file.
-    const known = new Set(data.pr.hunks.map((hunk) => hunk.id));
-    const groups = result.groups
-      .map((group) => ({ ...group, hunkIds: group.hunkIds.filter((id) => known.has(id)) }))
-      .filter((group) => group.hunkIds.length > 0);
-    const covered = new Set(groups.flatMap((group) => group.hunkIds));
-    const rest = data.pr.hunks.filter((hunk) => !covered.has(hunk.id)).map((hunk) => hunk.id);
-    if (rest.length > 0) {
-      groups.push({ id: "__new", title: "Changed since the analysis", why: "Hunks the last analysis did not see.", kind: "core", hunkIds: rest });
-    }
-    return groups;
-  }
-  return data.pr.files
-    .filter((file) => file.hunkIds.length > 0)
-    .map((file) => ({
-      id: `file-${file.index}`,
-      title: file.path,
-      why: "Analysis not ready yet; showing the diff by file.",
-      kind: "core" as const,
-      hunkIds: file.hunkIds,
-    }));
-}
-
 export function DiffTab({
   data,
   rpc,

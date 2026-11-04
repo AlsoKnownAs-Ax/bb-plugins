@@ -206,7 +206,8 @@ export function createAnalysis(deps: {
 
     const settings = await deps.settings();
     const ticketUrl = store.ticketOverride(ref) ?? findTicketUrl(pr.body, settings.ticketUrlPattern);
-    const analysisId = store.createAnalysis({ ref, headSha: pr.headSha, diffOnly: false, ticketUrl });
+    const hunkFingerprints = Object.fromEntries(pr.hunks.map((hunk) => [hunk.id, hunk.fingerprint]));
+    const analysisId = store.createAnalysis({ ref, headSha: pr.headSha, hunkFingerprints, diffOnly: false, ticketUrl });
     snapshots.set(analysisId, pr);
     publish(ref);
 

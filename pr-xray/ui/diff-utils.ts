@@ -1,7 +1,8 @@
 // Patch helpers for rendering hunk subsets and anchoring comments.
 import { getSingularPatch, processFile } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { Hunk, PendingComment, PrFile, ReviewThread } from "../shared/schema";
+import type { ReviewGet } from "../shared/contract";
+import type { Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread } from "../shared/schema";
 
 export interface HunkRange {
   oldStart: number;
@@ -118,6 +119,36 @@ export function lineInHunks(hunks: Hunk[], side: "LEFT" | "RIGHT", line: number)
       ? line >= range.newStart && line <= range.newEnd
       : line >= range.oldStart && line <= range.oldEnd;
   });
+}
+
+/** Groups from the analysis, or one group per file while it is not ready. */
+export function displayGroups(data: ReviewGet): ReviewGroup[] {
+  const result = data.completed?.result;
+  if (result && data.completed?.headSha === data.pr.headSha) return result.groups;
+  const analysed = data.completed?.hunkFingerprints;
+  if (result && analysed) {
+    // Older analysis: hunk ids are positions, so a new commit can move them. Find each group's hunks by content.
+    const unclaimed = new Map<string, string[]>();
+    for (const hunk of data.pr.hunks) unclaimed.set(hunk.fingerprint, [...(unclaimed.get(hunk.fingerprint) ?? []), hunk.id]);
+    const groups = result.groups
+      .map((group) => ({ ...group, hunkIds: group.hunkIds.flatMap((id) => unclaimed.get(analysed[id] ?? "")?.shift() ?? []) }))
+      .filter((group) => group.hunkIds.length > 0);
+    const covered = new Set(groups.flatMap((group) => group.hunkIds));
+    const rest = data.pr.hunks.filter((hunk) => !covered.has(hunk.id)).map((hunk) => hunk.id);
+    if (rest.length > 0) {
+      groups.push({ id: "__new", title: "Changed since the analysis", why: "Hunks the last analysis did not see.", kind: "core", hunkIds: rest });
+    }
+    return groups;
+  }
+  return data.pr.files
+    .filter((file) => file.hunkIds.length > 0)
+    .map((file) => ({
+      id: `file-${file.index}`,
+      title: file.path,
+      why: "Analysis not ready yet; showing the diff by file.",
+      kind: "core" as const,
+      hunkIds: file.hunkIds,
+    }));
 }
 
 /** A pending comment shows on its line only if it was written on this commit and the line is still in the diff. */

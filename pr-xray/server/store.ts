@@ -39,6 +39,7 @@ const MIGRATIONS = [
   // Viewed state per hunk content, so it survives new commits and re-analyses.
   `DROP TABLE viewed_groups`,
   `CREATE TABLE viewed_hunks (key TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (key, fingerprint))`,
+  `ALTER TABLE analyses ADD COLUMN hunk_fingerprints TEXT`,
 ];
 
 interface CommentRow {
@@ -72,6 +73,7 @@ interface AnalysisRow {
   status: "running" | "done" | "failed";
   error: string | null;
   result_json: string | null;
+  hunk_fingerprints: string | null;
   worker_thread_id: string | null;
   diff_only: number;
   ticket_url: string | null;
@@ -121,6 +123,7 @@ function toAnalysis(row: AnalysisRow): AnalysisRecord {
     status: row.status,
     error: row.error,
     result,
+    hunkFingerprints: row.hunk_fingerprints === null ? null : (JSON.parse(row.hunk_fingerprints) as Record<string, string>),
     workerThreadId: row.worker_thread_id,
     diffOnly: row.diff_only === 1,
     ticketUrl: row.ticket_url,
@@ -178,11 +181,11 @@ export function createStore(bb: BbPluginApi) {
     },
 
     // ---- analyses ----
-    createAnalysis(input: { ref: PrRef; headSha: string; diffOnly: boolean; ticketUrl: string | null }) {
+    createAnalysis(input: { ref: PrRef; headSha: string; hunkFingerprints: Record<string, string>; diffOnly: boolean; ticketUrl: string | null }) {
       const id = `an_${randomUUID().slice(0, 12)}`;
       db.prepare(
-        `INSERT INTO analyses (id, key, owner, repo, number, head_sha, status, diff_only, ticket_url, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+        `INSERT INTO analyses (id, key, owner, repo, number, head_sha, status, hunk_fingerprints, diff_only, ticket_url, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
       ).run(
         id,
         prRefKey(input.ref),
@@ -190,6 +193,7 @@ export function createStore(bb: BbPluginApi) {
         input.ref.repo,
         input.ref.number,
         input.headSha,
+        JSON.stringify(input.hunkFingerprints),
         input.diffOnly ? 1 : 0,
         input.ticketUrl,
         now(),

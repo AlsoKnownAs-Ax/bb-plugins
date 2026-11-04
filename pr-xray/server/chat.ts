@@ -46,7 +46,7 @@ function contextDocument(pr: PrDetails, analysis: AnalysisRecord | null): string
       parts.push("", `Ticket: ${result.ticket.title ?? result.ticket.url} (${result.ticket.url})${result.ticket.projectTitle ? `, project ${result.ticket.projectTitle}` : ""}`);
     }
     parts.push("", "### Groups (reading order)");
-    for (const group of result.groups) parts.push(`- [${group.id}] ${group.title} (${group.kind}): ${group.why} Hunks: ${group.hunkIds.join(", ")}`);
+    for (const group of result.groups) parts.push(`- [${group.id}] ${group.title} (${group.kind}): ${group.why}${stale ? "" : ` Hunks: ${group.hunkIds.join(", ")}`}`);
     parts.push("", "### Narrative");
     result.narrative.forEach((step, index) => parts.push(`${index + 1}. ${step.title}: ${step.body}`));
     if (result.lookClosely.length > 0) {

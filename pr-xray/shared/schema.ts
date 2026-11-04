@@ -178,6 +178,8 @@ export const analysisRecordSchema = z.object({
   status: z.enum(["running", "done", "failed"]),
   error: z.string().nullable(),
   result: analysisResultSchema.nullable(),
+  /** Hunk id -> content fingerprint when analysed. Null for analyses from before this was saved. */
+  hunkFingerprints: z.record(z.string(), z.string()).nullable(),
   workerThreadId: z.string().nullable(),
   diffOnly: z.boolean(),
   ticketUrl: z.string().nullable(),
