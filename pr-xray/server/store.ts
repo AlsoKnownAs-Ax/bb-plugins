@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
   analysisResultSchema,
+  draftCommentSchema,
   type AnalysisRecord,
   type AnalysisResult,
   type CommentTag,
@@ -79,6 +80,11 @@ interface AnalysisRow {
 }
 
 const now = () => new Date().toISOString();
+
+/** Drafts saved before commits were recorded have no headSha; "" makes them count as written on an older commit. */
+function parseDraft(json: string): DraftComment {
+  return draftCommentSchema.parse({ headSha: "", ...JSON.parse(json) });
+}
 
 function toComment(row: CommentRow): StoredComment {
   return {
@@ -274,7 +280,7 @@ export function createStore(bb: BbPluginApi) {
       const rows = db
         .prepare(`SELECT id, json, created_at FROM pending_comments WHERE key = ? ORDER BY created_at`)
         .all(prRefKey(ref)) as { id: string; json: string; created_at: string }[];
-      return rows.map((row) => ({ ...(JSON.parse(row.json) as DraftComment), id: row.id, createdAt: row.created_at }));
+      return rows.map((row) => ({ ...parseDraft(row.json), id: row.id, createdAt: row.created_at }));
     },
 
     addPendingComment(ref: PrRef, comment: DraftComment): PendingComment {
@@ -289,10 +295,10 @@ export function createStore(bb: BbPluginApi) {
       return { ...comment, id, createdAt };
     },
 
-    updatePendingComment(id: string, body: string) {
+    updatePendingComment(id: string, changes: Partial<Pick<DraftComment, "body" | "headSha">>) {
       const row = db.prepare(`SELECT json FROM pending_comments WHERE id = ?`).get(id) as { json: string } | undefined;
       if (row === undefined) return;
-      const comment = { ...(JSON.parse(row.json) as DraftComment), body };
+      const comment = { ...parseDraft(row.json), ...changes };
       db.prepare(`UPDATE pending_comments SET json = ? WHERE id = ?`).run(JSON.stringify(comment), id);
     },
 

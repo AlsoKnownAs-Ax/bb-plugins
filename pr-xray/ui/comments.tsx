@@ -353,7 +353,19 @@ export function ThreadView({
   );
 }
 
-export function PendingView({ rpc, prRef, comment }: { rpc: Rpc; prRef: PrRef; comment: PendingComment }) {
+export function PendingView({
+  rpc,
+  prRef,
+  comment,
+  note = "Part of your review; posted when you submit.",
+  canKeep = false,
+}: {
+  rpc: Rpc;
+  prRef: PrRef;
+  comment: PendingComment;
+  note?: string;
+  canKeep?: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   if (editing) {
     return (
@@ -380,8 +392,19 @@ export function PendingView({ rpc, prRef, comment }: { rpc: Rpc; prRef: PrRef; c
     <div className="my-2 max-w-3xl rounded-lg border border-l-4 border-warning/50 border-l-warning bg-warning/5 px-3 py-2 font-sans text-sm">
       <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
         <span className="rounded border border-warning/70 px-1.5 font-medium text-warning-text">pending</span>
-        <span>Part of your review; posted when you submit.</span>
+        <span>{note}</span>
         <span className="ml-auto flex gap-1">
+          {canKeep ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                rpc.call("comment.pendingKeep", { ref: prRef, id: comment.id }).catch((error: unknown) => toast.error(errorMessage(error)));
+              }}
+            >
+              Keep on latest commit
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
             Edit
           </Button>

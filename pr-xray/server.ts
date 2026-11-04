@@ -168,8 +168,12 @@ export default async function plugin(bb: BbPluginApi) {
       return pending;
     },
     "comment.pendingUpdate"({ ref, id, body }) {
-      store.updatePendingComment(id, body);
+      store.updatePendingComment(id, { body });
       comments.publish(ref);
+      return { ok: true };
+    },
+    async "comment.pendingKeep"({ ref, id }) {
+      await comments.keepPending(ref, id);
       return { ok: true };
     },
     "comment.pendingRemove"({ ref, id }) {

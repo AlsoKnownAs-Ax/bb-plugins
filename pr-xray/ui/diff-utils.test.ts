@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { Hunk } from "../shared/schema";
-import { firstChangedLine, hunkRange, lineInHunks, sideLines } from "./diff-utils";
+import type { Hunk, PendingComment } from "../shared/schema";
+import { draftInDiff, firstChangedLine, hunkRange, lineInHunks, sideLines } from "./diff-utils";
 
 function hunk(header: string, body: string[]): Hunk {
   return { id: "h1", path: "a.ts", header, patch: [header, ...body].join("\n"), fingerprint: "f1" } as unknown as Hunk;
 }
 
 const sample = hunk("@@ -10,3 +10,4 @@", [" keep", "-old", "+new one", "+new two", " tail"]);
+
+describe("where a pending comment shows", () => {
+  const comment = { side: "RIGHT", line: 11, headSha: "head" } as PendingComment;
+
+  it("shows inline when written on this commit and the line is in the diff", () => {
+    expect(draftInDiff(comment, "head", [sample])).toBe(true);
+  });
+
+  it("does not show inline when written on another commit", () => {
+    expect(draftInDiff(comment, "newer", [sample])).toBe(false);
+  });
+
+  it("does not show inline when the line left the diff", () => {
+    expect(draftInDiff({ ...comment, line: 500 }, "head", [sample])).toBe(false);
+  });
+});
 
 describe("hunk line helpers", () => {
   it("reads the ranges from the header", () => {

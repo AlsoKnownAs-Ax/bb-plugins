@@ -77,6 +77,10 @@ export const rpcContract = defineRpcContract({
     input: z.object({ ref: prRefSchema, id: z.string(), body: z.string().trim().min(1) }),
     output: ok,
   },
+  "comment.pendingKeep": {
+    input: z.object({ ref: prRefSchema, id: z.string() }),
+    output: ok,
+  },
   "comment.pendingRemove": {
     input: z.object({ ref: prRefSchema, id: z.string() }),
     output: ok,

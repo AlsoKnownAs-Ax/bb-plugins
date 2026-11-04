@@ -192,6 +192,8 @@ export const diffSideSchema = z.enum(["LEFT", "RIGHT"]);
 export type DiffSide = z.infer<typeof diffSideSchema>;
 
 export const draftCommentSchema = z.object({
+  /** The commit this comment was written on; its line numbers only hold there. */
+  headSha: z.string(),
   path: z.string(),
   line: z.number().int().positive(),
   side: diffSideSchema,

@@ -20,7 +20,7 @@ import { threadsToFix } from "../shared/fix-scope";
 import type { DraftComment, FixScope, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
 import { Composer, PendingView, ThreadView } from "./comments";
 import { prRefKey } from "../shared/pr-ref";
-import { firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
+import { draftInDiff, firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
 import { errorMessage, type ReviewGet, type Rpc } from "./useReview";
 
 export type ViewMode = "unified" | "split";
@@ -289,12 +289,15 @@ export function DiffTab({
     return ids;
   }, [hunks, pr.files, pr.threads]);
   const otherThreads = pr.threads.filter((thread) => !anchoredThreadIds.has(thread.id));
+  const hunksOfPath = (path: string) => pr.files.find((file) => file.path === path)?.hunkIds.flatMap((id) => hunks.get(id) ?? []) ?? [];
+  const looseDrafts = data.pending.filter((comment) => !draftInDiff(comment, pr.headSha, hunksOfPath(comment.path)));
 
   const draftToComment = (target: DraftTarget, body: string): DraftComment => {
     const side = toSide(target.range.endSide ?? target.range.side);
     const start = Math.min(target.range.start, target.range.end);
     const end = Math.max(target.range.start, target.range.end);
     return {
+      headSha: pr.headSha,
       path: target.path,
       line: end,
       side,
@@ -384,6 +387,29 @@ export function DiffTab({
               </button>
             </div>
           ))}
+          {looseDrafts.length > 0 ? (
+            <section id="pending-to-check" className="space-y-2">
+              <h2 className="text-base font-semibold">Pending comments to check</h2>
+              <p className="text-sm text-muted-foreground">These can't be posted as they are, because they were written on an older commit or their line left the diff.</p>
+              {looseDrafts.map((comment) => {
+                const canKeep = comment.headSha !== pr.headSha && lineInHunks(hunksOfPath(comment.path), comment.side, comment.line);
+                return (
+                  <div key={comment.id}>
+                    <div className="font-mono text-xs text-muted-foreground">
+                      {comment.path}:{comment.line}
+                    </div>
+                    <PendingView
+                      rpc={rpc}
+                      prRef={pr.ref}
+                      comment={comment}
+                      canKeep={canKeep}
+                      note={canKeep ? "Check that this line is still right, then keep it." : "This line left the diff. Copy the text if you need it, then delete it."}
+                    />
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
           {otherThreads.length > 0 ? (
             <button
               type="button"
@@ -592,7 +618,7 @@ function GroupHunks({
         const open = isFileOpen(file.path);
         const comments =
           data.pr.threads.filter((thread) => !thread.isResolved && threadVisibleIn(thread, file.path, fileHunks)).length +
-          data.pending.filter((comment) => comment.path === file.path && lineInHunks(fileHunks, comment.side, comment.line)).length;
+          data.pending.filter((comment) => comment.path === file.path && draftInDiff(comment, data.pr.headSha, fileHunks)).length;
         return (
           <div key={fileIndex} id={`file-${fileKey(group.id, file.path)}`} className="scroll-mt-0 rounded-lg border border-border">
             {/* Sticky so Viewed stays reachable while scrolling a long file. */}
@@ -816,7 +842,7 @@ function HunkDiff({
       if (threadVisibleIn(thread, file.path, [hunk])) add(thread.side, thread.line!, { kind: "thread", thread });
     }
     for (const comment of data.pending) {
-      if (comment.path === file.path && lineInHunks([hunk], comment.side, comment.line)) add(comment.side, comment.line, { kind: "pending", comment });
+      if (comment.path === file.path && draftInDiff(comment, pr.headSha, [hunk])) add(comment.side, comment.line, { kind: "pending", comment });
     }
     if (draft) {
       const side = toSide(draft.range.endSide ?? draft.range.side);
@@ -952,7 +978,8 @@ function SubmitReviewDialog({
   const own = data.pr.isOwnPr;
   const submittedEvent = own ? "COMMENT" : event;
   // GitHub only accepts an empty review when it is an approval.
-  const canSubmit = submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "";
+  const staleDrafts = data.pending.filter((comment) => comment.headSha !== data.pr.headSha).length;
+  const canSubmit = staleDrafts === 0 && (submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "");
   const submit = async () => {
     setBusy(true);
     try {
@@ -978,7 +1005,9 @@ function SubmitReviewDialog({
           <DialogTitle>Submit review</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          {data.pending.length} pending comment{data.pending.length === 1 ? "" : "s"} will be posted to GitHub.
+          {staleDrafts > 0
+            ? `${staleDrafts} pending comment${staleDrafts === 1 ? " was" : "s were"} written on an older commit. Keep or delete ${staleDrafts === 1 ? "it" : "them"} under "Pending comments to check" before you submit.`
+            : `${data.pending.length} pending comment${data.pending.length === 1 ? "" : "s"} will be posted to GitHub.`}
         </p>
         <VoiceInputTextarea
           value={body}

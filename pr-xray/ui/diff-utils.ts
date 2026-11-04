@@ -1,7 +1,7 @@
 // Patch helpers for rendering hunk subsets and anchoring comments.
 import { getSingularPatch, processFile } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { Hunk, PrFile, ReviewThread } from "../shared/schema";
+import type { Hunk, PendingComment, PrFile, ReviewThread } from "../shared/schema";
 
 export interface HunkRange {
   oldStart: number;
@@ -118,6 +118,11 @@ export function lineInHunks(hunks: Hunk[], side: "LEFT" | "RIGHT", line: number)
       ? line >= range.newStart && line <= range.newEnd
       : line >= range.oldStart && line <= range.oldEnd;
   });
+}
+
+/** A pending comment shows on its line only if it was written on this commit and the line is still in the diff. */
+export function draftInDiff(comment: PendingComment, headSha: string, hunks: Hunk[]): boolean {
+  return comment.headSha === headSha && lineInHunks(hunks, comment.side, comment.line);
 }
 
 export function threadVisibleIn(thread: ReviewThread, path: string, hunks: Hunk[]): boolean {

@@ -55,15 +55,23 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
   }
 
   async function postSingle(ref: PrRef, comment: DraftComment) {
-    const headSha = await github.headSha(ref);
-    const posted = await github.createComment(ref, headSha, comment);
-    recordPosted(ref, headSha, posted);
+    const posted = await github.createComment(ref, comment.headSha, comment);
+    recordPosted(ref, comment.headSha, posted);
+    publish(ref);
+  }
+
+  async function keepPending(ref: PrRef, id: string) {
+    store.updatePendingComment(id, { headSha: await github.headSha(ref) });
     publish(ref);
   }
 
   async function submitReview(ref: PrRef, event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES", body: string) {
     const headSha = await github.headSha(ref);
     const pending = store.pendingComments(ref);
+    // A review has one commit, and a draft's line numbers only hold on the commit it was written on.
+    if (pending.some((comment) => comment.headSha !== headSha)) {
+      throw new Error('Some pending comments were written on an older commit. Keep or delete them under "Pending comments to check", then submit.');
+    }
     const reviewId = await github.submitReview(
       ref,
       headSha,
@@ -243,6 +251,7 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
 
   return {
     postSingle,
+    keepPending,
     submitReview,
     reply,
     editBody,

@@ -23,7 +23,7 @@ describe("comment tag markers", () => {
 
 describe("submitting a review", () => {
   const ref = { owner: "acme", repo: "web", number: 7 };
-  const draft = (id: string): PendingComment => ({
+  const draft = (id: string, headSha = "head"): PendingComment => ({
     id,
     createdAt: "2026-11-04T00:00:00.000Z",
     path: "a.ts",
@@ -32,6 +32,7 @@ describe("submitting a review", () => {
     startLine: null,
     startSide: null,
     body: `draft ${id}`,
+    headSha,
   });
   const posted = { id: 1, body: "draft", html_url: "https://github.com/x", path: "a.ts", line: 3 };
 
@@ -43,11 +44,13 @@ describe("submitting a review", () => {
         rows.current = rows.current.filter((row) => !ids.includes(row.id));
       },
       insertComment: vi.fn(),
+      updatePendingComment: vi.fn(),
     };
     const github = {
       headSha: vi.fn(async () => "head"),
       submitReview: vi.fn(async () => 42),
       reviewComments: vi.fn(async () => [posted]),
+      createComment: vi.fn(async () => posted),
     };
     const bb = {
       realtime: { publish: vi.fn() },
@@ -81,6 +84,26 @@ describe("submitting a review", () => {
     });
     await comments.submitReview(ref, "COMMENT", "");
     expect(rows.current.map((row) => row.id)).toEqual(["b"]);
+  });
+
+  it("refuses a draft written on an older commit without posting anything", async () => {
+    const { comments, rows, github } = setup([draft("a"), draft("b", "old")]);
+    await expect(comments.submitReview(ref, "COMMENT", "")).rejects.toThrow("older commit");
+    expect(github.submitReview).not.toHaveBeenCalled();
+    expect(rows.current).toHaveLength(2);
+  });
+
+  it("moves a draft the user keeps onto the latest commit", async () => {
+    const { comments, store } = setup([draft("a", "old")]);
+    await comments.keepPending(ref, "a");
+    expect(store.updatePendingComment).toHaveBeenCalledWith("a", { headSha: "head" });
+  });
+
+  it("posts a single comment on the commit it was written on", async () => {
+    const { comments, github, store } = setup([]);
+    await comments.postSingle(ref, draft("a", "seen"));
+    expect(github.createComment).toHaveBeenCalledWith(ref, "seen", expect.objectContaining({ line: 3 }));
+    expect(store.insertComment).toHaveBeenCalledWith(expect.objectContaining({ headSha: "seen" }));
   });
 
   it("keeps the drafts when GitHub rejects the review", async () => {
