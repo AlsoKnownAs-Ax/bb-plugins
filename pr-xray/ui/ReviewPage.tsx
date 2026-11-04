@@ -1,5 +1,5 @@
 // One PR's review: header, analysis status, Diff/Explain tabs, focus mode.
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
@@ -21,15 +21,32 @@ import { errorMessage, useReview } from "./useReview";
 
 type Tab = "diff" | "explain";
 
+const PAGE_FRAME_CLASS = "relative flex h-full min-h-0 flex-1 flex-col";
+
 function FocusFrame({ focus, children }: { focus: boolean; children: ReactNode }) {
   const scope = usePortalScopeProps();
-  if (!focus) return <div className="relative flex h-full min-h-0 flex-1 flex-col">{children}</div>;
-  // One layer below bb's toaster (z-index 49), so toasts stay visible in focus mode.
-  return createPortal(
-    <div {...scope} className="fixed inset-0 z-[48] flex flex-col bg-background text-foreground">
-      {children}
-    </div>,
-    document.body,
+  const slot = useRef<HTMLDivElement>(null);
+  // One element that moves between the page and document.body. React sees the same tree
+  // either way, so toggling focus keeps state such as a half-written comment.
+  const [frame] = useState(() => {
+    const element = document.createElement("div");
+    element.style.display = "contents";
+    return element;
+  });
+  useLayoutEffect(() => {
+    (focus ? document.body : slot.current)?.append(frame);
+    return () => frame.remove();
+  }, [focus, frame]);
+  return (
+    <div ref={slot} className={PAGE_FRAME_CLASS}>
+      {createPortal(
+        // One layer below bb's toaster (z-index 49), so toasts stay visible in focus mode.
+        <div {...scope} className={focus ? "fixed inset-0 z-[48] flex flex-col bg-background text-foreground" : PAGE_FRAME_CLASS}>
+          {children}
+        </div>,
+        frame,
+      )}
+    </div>
   );
 }
 
