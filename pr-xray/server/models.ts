@@ -1,72 +1,48 @@
-// Which model runs analysis (and, failing a cheap one, tagging). The user's choice lives in kv; the
-// recommendation is the first available entry of a ranked list.
+// Which model runs PR X-ray's agents. Nothing is selected by default: the spawn
+// then carries no model, so bb applies the user's own defaults.
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
-import { modelSelectionSchema, type ModelSelection } from "../shared/schema";
+import { modelSelectionSchema, type ModelPurpose, type ModelSelection } from "../shared/schema";
 
-/**
- * Ranked for this task: grouping hunks and explaining cross-file logic needs
- * solid code reasoning, but not a frontier model. Update as models change.
- */
-export const RECOMMENDED_MODELS: readonly ModelSelection[] = [
-  { providerId: "claude-code", model: "claude-sonnet-5-5", reasoningLevel: "medium" },
-  { providerId: "claude-code", model: "claude-sonnet-5", reasoningLevel: "medium" },
-  { providerId: "claude-code", model: "claude-sonnet-4-6", reasoningLevel: "medium" },
-];
-
-/** Tagging one comment is trivial: the cheapest available model will do. */
-export const CHEAP_MODELS: readonly ModelSelection[] = [
-  { providerId: "claude-code", model: "claude-haiku-5-5", reasoningLevel: "low" },
-  { providerId: "claude-code", model: "claude-haiku-4-5", reasoningLevel: "low" },
-];
-
-const KEY = "modelSelection";
+const STORAGE_KEYS: Record<ModelPurpose, string> = {
+  analysis: "modelSelection",
+  tagging: "taggingModelSelection",
+};
 
 export function createModels(bb: BbPluginApi) {
-  async function available(selection: ModelSelection): Promise<boolean> {
-    try {
-      const { models } = await bb.sdk.providers.models({ providerId: selection.providerId });
-      return models.some((model) => model.model === selection.model || model.id === selection.model);
-    } catch {
-      return false;
-    }
+  async function selected(purpose: ModelPurpose): Promise<ModelSelection | null> {
+    const parsed = modelSelectionSchema.safeParse(await bb.storage.kv.get(STORAGE_KEYS[purpose]));
+    return parsed.success ? parsed.data : null;
   }
 
-  async function firstAvailable(candidates: readonly ModelSelection[]): Promise<ModelSelection | null> {
-    for (const candidate of candidates) {
-      if (await available(candidate)) return candidate;
+  async function select(purpose: ModelPurpose, selection: ModelSelection | null) {
+    if (selection === null) await bb.storage.kv.delete(STORAGE_KEYS[purpose]);
+    else await bb.storage.kv.set(STORAGE_KEYS[purpose], selection);
+  }
+
+  /** A valid starting value for the model picker, for when the user first overrides bb's default. */
+  async function pickerSeed(): Promise<ModelSelection | null> {
+    const providers = await bb.sdk.providers.list();
+    for (const provider of providers) {
+      const { models } = await bb.sdk.providers.models({ providerId: provider.id });
+      const model = models.find((candidate) => candidate.isDefault) ?? models[0];
+      if (model !== undefined) {
+        return { providerId: provider.id, model: model.model, reasoningLevel: model.defaultReasoningEffort };
+      }
     }
     return null;
   }
 
-  const recommended = () => firstAvailable(RECOMMENDED_MODELS);
-  const cheap = () => firstAvailable(CHEAP_MODELS);
-
-  async function stored(): Promise<ModelSelection | null> {
-    const parsed = modelSelectionSchema.safeParse(await bb.storage.kv.get(KEY));
-    return parsed.success ? parsed.data : null;
-  }
-
-  async function setStored(selection: ModelSelection | null) {
-    if (selection === null) await bb.storage.kv.delete(KEY);
-    else await bb.storage.kv.set(KEY, selection);
-  }
-
-  /** The selection used at spawn time; null lets bb pick its defaults. */
-  async function effective(): Promise<ModelSelection | null> {
-    return (await stored()) ?? (await recommended());
-  }
-
-  return { recommended, cheap, stored, setStored, effective };
+  return { selected, select, pickerSeed };
 }
 
 export type Models = ReturnType<typeof createModels>;
 
-export function spawnModelArgs(selection: ModelSelection | null, reasoningOverride?: string) {
+export function spawnModelArgs(selection: ModelSelection | null) {
   if (selection === null) return {};
   return {
     providerId: selection.providerId,
     model: selection.model,
-    reasoningLevel: reasoningOverride ?? selection.reasoningLevel,
+    reasoningLevel: selection.reasoningLevel,
     ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
   };
 }

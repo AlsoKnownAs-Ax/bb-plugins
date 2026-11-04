@@ -195,6 +195,10 @@ export function createStore(bb: BbPluginApi) {
       db.prepare(`UPDATE analyses SET worker_thread_id = ? WHERE id = ?`).run(threadId, id);
     },
 
+    markAnalysisDiffOnly(id: string) {
+      db.prepare(`UPDATE analyses SET diff_only = 1 WHERE id = ?`).run(id);
+    },
+
     completeAnalysis(id: string, result: AnalysisResult) {
       db.prepare(
         `UPDATE analyses SET status = 'done', result_json = ?, error = NULL, finished_at = ? WHERE id = ?`,

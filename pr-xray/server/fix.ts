@@ -3,6 +3,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { PrDetails, ReviewThread, StoredComment } from "../shared/schema";
 import { stripMarker } from "./comments";
 import { findProject, personalProjectId } from "./projects";
+import { prWorktreeEnvironment } from "./worker-environment";
 
 export interface FixThread {
   threadId: string;
@@ -16,6 +17,9 @@ function quote(text: string): string {
 }
 
 async function spawnFix(bb: BbPluginApi, pr: PrDetails, title: string, prompt: string): Promise<FixThread> {
+  if (!pr.headInBaseRepo) {
+    throw new Error("Fixing with agents is not available for pull requests from forks.");
+  }
   const project = await findProject(bb, pr.ref);
   const base = {
     projectId: project?.projectId ?? (await personalProjectId(bb)),
@@ -24,20 +28,13 @@ async function spawnFix(bb: BbPluginApi, pr: PrDetails, title: string, prompt: s
     pluginMetadata: { role: "fix", pr: `${pr.ref.owner}/${pr.ref.repo}#${pr.ref.number}` },
   };
   if (project?.hostId) {
-    try {
-      // An isolated worktree based on the PR branch keeps the user's checkout untouched.
-      const thread = await bb.sdk.threads.spawn({
-        ...base,
-        environment: {
-          type: "host",
-          hostId: project.hostId,
-          workspace: { type: "managed-worktree", baseBranch: { kind: "named", name: pr.headRef } },
-        },
-      });
-      return { threadId: thread.id };
-    } catch (error) {
-      bb.log.warn(`worktree on ${pr.headRef} failed, using the project default: ${String(error)}`);
-    }
+    // An isolated worktree keeps the user's checkout untouched. If it can't be
+    // created the error reaches the user: never fall back to that checkout.
+    const thread = await bb.sdk.threads.spawn({
+      ...base,
+      environment: prWorktreeEnvironment(project.hostId, pr.headRef),
+    });
+    return { threadId: thread.id };
   }
   const thread = await bb.sdk.threads.spawn({ ...base, environment: { type: "project-default" } });
   return { threadId: thread.id };

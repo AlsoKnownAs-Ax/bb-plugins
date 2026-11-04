@@ -5,6 +5,7 @@ import {
   analysisRecordSchema,
   commentTagSchema,
   draftCommentSchema,
+  modelPurposeSchema,
   modelSelectionSchema,
   pendingCommentSchema,
   prDetailsSchema,
@@ -164,12 +165,12 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       identity: z.object({ login: z.string(), source: z.enum(["token", "gh"]) }).nullable(),
       identityError: z.string().nullable(),
-      model: modelSelectionSchema.nullable(),
-      recommended: modelSelectionSchema.nullable(),
+      models: z.object({ analysis: modelSelectionSchema.nullable(), tagging: modelSelectionSchema.nullable() }),
+      pickerSeed: modelSelectionSchema.nullable(),
     }),
   },
   "settings.setModel": {
-    input: z.object({ selection: modelSelectionSchema.nullable() }),
+    input: z.object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() }),
     output: ok,
   },
 });

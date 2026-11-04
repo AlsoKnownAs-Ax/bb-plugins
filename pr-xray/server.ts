@@ -7,7 +7,7 @@ import { parsePrRef, prRefKey, prRefToSubPath, REVIEW_PANEL_PATH } from "./share
 import type { PrDetails, PrRef } from "./shared/schema";
 import { ANALYSIS_TOOL, createAnalysis, findTicketUrl } from "./server/analysis";
 import { chatInstructions, createChat } from "./server/chat";
-import { COMMENTS_CHANGED, TAGS_TOOL, createComments } from "./server/comments";
+import { TAGS_TOOL, createComments } from "./server/comments";
 import { fixDiagramComments, fixDiffComments, fixSingleComment } from "./server/fix";
 import { createGithub, GithubError } from "./server/github";
 import { createModels } from "./server/models";
@@ -276,10 +276,15 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (error) {
         identityError = error instanceof Error ? error.message : String(error);
       }
-      return { identity, identityError, model: await models.stored(), recommended: await models.recommended() };
+      const [analysisModel, taggingModel, pickerSeed] = await Promise.all([
+        models.selected("analysis"),
+        models.selected("tagging"),
+        models.pickerSeed().catch(() => null),
+      ]);
+      return { identity, identityError, models: { analysis: analysisModel, tagging: taggingModel }, pickerSeed };
     },
-    async "settings.setModel"({ selection }) {
-      await models.setStored(selection);
+    async "settings.setModel"({ purpose, selection }) {
+      await models.select(purpose, selection);
       return { ok: true };
     },
   });

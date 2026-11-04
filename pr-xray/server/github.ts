@@ -195,6 +195,7 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
       draft: pr.draft ?? false,
       headSha: pr.head.sha,
       headRef: pr.head.ref,
+      headInBaseRepo: pr.head.repo?.full_name.toLowerCase() === `${ref.owner}/${ref.repo}`.toLowerCase(),
       baseRef: pr.base.ref,
       viewer: viewer.login,
       isOwnPr: viewer.login.toLowerCase() === (pr.user?.login ?? "").toLowerCase(),
@@ -359,7 +360,7 @@ interface RawPull {
   draft?: boolean;
   merged_at?: string | null;
   user: { login: string } | null;
-  head: { sha: string; ref: string };
+  head: { sha: string; ref: string; repo: { full_name: string } | null };
   base: { sha: string; ref: string };
 }
 

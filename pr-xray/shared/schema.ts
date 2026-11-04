@@ -158,6 +158,8 @@ export const prDetailsSchema = z.object({
   draft: z.boolean(),
   headSha: z.string(),
   headRef: z.string(),
+  /** False for a fork, or when the head repository was deleted. */
+  headInBaseRepo: z.boolean(),
   baseRef: z.string(),
   viewer: z.string(),
   isOwnPr: z.boolean(),
@@ -235,6 +237,9 @@ export const modelSelectionSchema = z.object({
   serviceTier: z.string().optional(),
 });
 export type ModelSelection = z.infer<typeof modelSelectionSchema>;
+
+export const modelPurposeSchema = z.enum(["analysis", "tagging"]);
+export type ModelPurpose = z.infer<typeof modelPurposeSchema>;
 
 export const reviewSummarySchema = z.object({
   ref: prRefSchema,

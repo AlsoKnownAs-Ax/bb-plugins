@@ -146,7 +146,7 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
           <h1 className="truncate text-base font-semibold">{pr.title}</h1>
         </div>
         <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
-          {(["diff", "explain"] as const).map((value, index) => (
+          {(["diff", "explain"] as const).map((value) => (
             <Button key={value} size="sm" variant="ghost" aria-pressed={tab === value} onClick={() => setTab(value)}>
               <Icon name={value === "diff" ? "FileDiff" : "Workflow"} />
               {value === "diff" ? "Diff" : "Explain"}

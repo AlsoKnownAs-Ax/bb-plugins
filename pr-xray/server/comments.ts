@@ -194,7 +194,7 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
       title: "PR X-ray: tag comment",
       visibility: "hidden",
       pluginMetadata: { role: "tagging" },
-      ...spawnModelArgs((await models.cheap()) ?? (await models.effective()), "low"),
+      ...spawnModelArgs(await models.selected("tagging")),
     });
     // Resolves when the worker goes idle or fails, so the UI can show progress.
     await new Promise<void>((done) => taggingWorkers.set(worker.id, { commentId, done }));
