@@ -7,7 +7,6 @@ import {
   type CommentTag,
   type DraftComment,
   type PrRef,
-  type StoredComment,
 } from "../shared/schema";
 import { prRefKey } from "../shared/pr-ref";
 import type { Github, RawReviewComment } from "./github";
@@ -18,11 +17,8 @@ import type { Store } from "./store";
 
 export const COMMENTS_CHANGED = "comments-changed";
 export const TAGS_TOOL = "pr_xray_submit_tags";
+// Older versions wrote tags into the GitHub comment. Tags now stay in bb, but those comments still carry this.
 const MARKER = /\n*<!-- pr-xray: tag=[a-z-]+ -->\s*$/u;
-
-export function withMarker(body: string, tag: CommentTag): string {
-  return `${body.replace(MARKER, "")}\n\n<!-- pr-xray: tag=${tag} -->`;
-}
 
 export function stripMarker(body: string): string {
   return body.replace(MARKER, "");
@@ -99,15 +95,12 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
     publish(ref);
   }
 
-  /** Replaces a posted comment's text, keeping its hidden tag marker. */
+  /** Replaces a posted comment's text. */
   async function editBody(ref: PrRef, commentDatabaseId: number, body: string) {
     const text = stripMarker(body).trim();
     if (text === "") throw new Error("A comment can't be empty.");
-    const current = await github.getComment(ref, commentDatabaseId);
+    await github.updateCommentBody(ref, commentDatabaseId, text);
     const stored = store.commentByGithubId(commentDatabaseId);
-    const existingMarker = MARKER.exec(current.body)?.[0] ?? "";
-    const next = stored?.tag ? withMarker(text, stored.tag) : `${text}${existingMarker}`;
-    await github.updateCommentBody(ref, commentDatabaseId, next);
     if (stored) store.updateComment(stored.id, { body: text });
     publish(ref);
   }
@@ -164,23 +157,11 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
     publish(analysis.ref);
   }
 
-  async function setTag(commentId: string, tag: CommentTag) {
+  function setTag(commentId: string, tag: CommentTag) {
     const comment = store.updateComment(commentId, { tag });
     if (comment === null) return null;
-    await writeMarker(comment);
     publish(comment.ref);
     return comment;
-  }
-
-  async function writeMarker(comment: StoredComment) {
-    if (comment.source !== "diff" || comment.githubCommentId === null || comment.tag === null) return;
-    try {
-      const current = await github.getComment(comment.ref, comment.githubCommentId);
-      const next = withMarker(current.body, comment.tag);
-      if (next !== current.body) await github.updateCommentBody(comment.ref, comment.githubCommentId, next);
-    } catch (error) {
-      bb.log.warn(`could not write tag marker on GitHub comment ${comment.githubCommentId}: ${String(error)}`);
-    }
   }
 
   // ---- LLM tagging (only when the user asks) ----------------------------------
@@ -229,7 +210,7 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
         return { content: [{ type: "text", text: "This thread is not a PR X-ray tagging worker." }], isError: true };
       }
       const match = tags.find((entry) => entry.commentId === allowed);
-      if (match) await setTag(allowed, match.tag);
+      if (match) setTag(allowed, match.tag);
       return "Tagged. End your turn now.";
     },
   });

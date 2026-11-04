@@ -201,8 +201,8 @@ export default async function plugin(bb: BbPluginApi) {
       invalidate(ref);
       return { ok: true };
     },
-    async "comment.setTag"({ commentId, tag }) {
-      await comments.setTag(commentId, tag);
+    "comment.setTag"({ commentId, tag }) {
+      comments.setTag(commentId, tag);
       return { ok: true };
     },
     async "comment.autoTag"({ commentId }) {

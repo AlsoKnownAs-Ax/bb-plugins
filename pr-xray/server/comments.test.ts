@@ -1,17 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PendingComment } from "../shared/schema";
-import { createComments, stripMarker, withMarker } from "./comments";
+import { createComments, stripMarker } from "./comments";
 
 describe("comment tag markers", () => {
-  it("adds a marker that strips back to the original body", () => {
-    const marked = withMarker("Needs a test.", "missing-test");
-    expect(marked).toBe("Needs a test.\n\n<!-- pr-xray: tag=missing-test -->");
-    expect(stripMarker(marked)).toBe("Needs a test.");
-  });
-
-  it("replaces an existing marker instead of stacking them", () => {
-    const retagged = withMarker(withMarker("Rename this.", "naming"), "design");
-    expect(retagged).toBe("Rename this.\n\n<!-- pr-xray: tag=design -->");
+  it("strips a marker left by an older version", () => {
+    expect(stripMarker("Needs a test.\n\n<!-- pr-xray: tag=missing-test -->")).toBe("Needs a test.");
   });
 
   it("leaves other text alone", () => {
@@ -45,12 +38,15 @@ describe("submitting a review", () => {
       },
       insertComment: vi.fn(),
       updatePendingComment: vi.fn(),
+      updateComment: vi.fn(() => ({ id: "cm_1", source: "diff", ref, githubCommentId: 9, tag: "bug" })),
+      commentByGithubId: vi.fn(() => ({ id: "cm_1", tag: "bug" })),
     };
     const github = {
       headSha: vi.fn(async () => "head"),
       submitReview: vi.fn(async () => 42),
       reviewComments: vi.fn(async () => [posted]),
       createComment: vi.fn(async () => posted),
+      updateCommentBody: vi.fn(async () => undefined),
     };
     const bb = {
       realtime: { publish: vi.fn() },
@@ -104,6 +100,19 @@ describe("submitting a review", () => {
     await comments.postSingle(ref, draft("a", "seen"));
     expect(github.createComment).toHaveBeenCalledWith(ref, "seen", expect.objectContaining({ line: 3 }));
     expect(store.insertComment).toHaveBeenCalledWith(expect.objectContaining({ headSha: "seen" }));
+  });
+
+  it("keeps tags in bb and never edits the GitHub comment", async () => {
+    const { comments, store, github } = setup([]);
+    await comments.setTag("cm_1", "bug");
+    expect(store.updateComment).toHaveBeenCalledWith("cm_1", { tag: "bug" });
+    expect(github.updateCommentBody).not.toHaveBeenCalled();
+  });
+
+  it("removes an old tag marker when the user edits a comment", async () => {
+    const { comments, github } = setup([]);
+    await comments.editBody(ref, 9, "New text\n\n<!-- pr-xray: tag=bug -->");
+    expect(github.updateCommentBody).toHaveBeenCalledWith(ref, 9, "New text");
   });
 
   it("keeps the drafts when GitHub rejects the review", async () => {

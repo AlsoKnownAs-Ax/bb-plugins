@@ -270,13 +270,6 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
     );
   }
 
-  async function getComment(ref: PrRef, commentId: number) {
-    return request<RawReviewComment>(
-      "GET",
-      `/repos/${ref.owner}/${ref.repo}/pulls/comments/${commentId}`,
-    );
-  }
-
   async function updateCommentBody(ref: PrRef, commentId: number, body: string) {
     return request<RawReviewComment>(
       "PATCH",
@@ -320,7 +313,6 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
     submitReview,
     reviewComments,
     reply,
-    getComment,
     updateCommentBody,
     setThreadResolved,
     fileContent,
