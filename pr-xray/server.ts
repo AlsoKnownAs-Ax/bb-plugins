@@ -5,9 +5,10 @@ import { z } from "zod";
 import { rpcContract } from "./shared/contract";
 import { parsePrRef, prRefKey, prRefToSubPath, REVIEW_PANEL_PATH } from "./shared/pr-ref";
 import type { PrDetails, PrRef } from "./shared/schema";
-import { ANALYSIS_TOOL, createAnalysis, findTicketUrl } from "./server/analysis";
+import { agentTools, REVIEW_TOOL } from "./server/agent-tools";
+import { createAnalysis, findTicketUrl } from "./server/analysis";
 import { chatInstructions, createChat } from "./server/chat";
-import { TAGS_TOOL, createComments } from "./server/comments";
+import { createComments } from "./server/comments";
 import { fixDiagramComments, fixDiffComments, fixSingleComment } from "./server/fix";
 import { createGithub, GithubError } from "./server/github";
 import { createModels } from "./server/models";
@@ -15,7 +16,6 @@ import { createStore } from "./server/store";
 
 export type { rpcContract };
 
-const REVIEW_TOOL = "pr_xray_review";
 const PR_CACHE_MS = 20_000;
 
 export default async function plugin(bb: BbPluginApi) {
@@ -321,12 +321,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   // Worker tools are offered only to the workers that need them.
   bb.agents.configure((context) => {
-    const role = context.pluginMetadata.role;
-    const tools = [REVIEW_TOOL];
-    if (role === "analysis") tools.push(ANALYSIS_TOOL);
-    if (role === "tagging") tools.push(TAGS_TOOL);
     const instructions = chatInstructions(context.pluginMetadata);
-    return { tools, skills: [], ...(instructions ? { instructions } : {}) };
+    return { tools: agentTools(context.pluginMetadata.role), skills: [], ...(instructions ? { instructions } : {}) };
   });
 
   // ---- CLI -----------------------------------------------------------------------
