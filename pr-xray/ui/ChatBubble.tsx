@@ -20,10 +20,13 @@ const SUGGESTIONS = [
 export function ChatBubble({
   rpc,
   prRef,
+  onAsk,
   openRequest,
 }: {
   rpc: Rpc;
   prRef: PrRef;
+  /** Starts the chat, or rejects if the user declines. Opens on the thread through openRequest. */
+  onAsk: (question: string) => Promise<void>;
   /** Set after a question was asked from elsewhere (the diff): open on that thread. */
   openRequest: { threadId: string; nonce: number } | null;
 }) {
@@ -93,8 +96,7 @@ export function ChatBubble({
               <FirstQuestion
                 focusRequest={focusRequest}
                 onAsk={async (question) => {
-                  const result = await rpc.call("chat.start", { ref: prRef, question });
-                  setThreadId(result.threadId);
+                  await onAsk(question);
                   setFocusRequest(Date.now());
                 }}
               />
@@ -141,7 +143,8 @@ function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (
     <div className="flex h-full flex-col gap-3 p-3">
       <p className="text-sm text-muted-foreground">
         Ask anything about this pull request. The agent has read its description, diff, review threads and the PR X-ray
-        analysis. It only reads; it never changes code or posts to GitHub.
+        analysis. It is told to only read, not to change code or post to GitHub, but that is an instruction and not a
+        security limit.
       </p>
       <div className="flex flex-col gap-1.5">
         {SUGGESTIONS.map((suggestion) => (

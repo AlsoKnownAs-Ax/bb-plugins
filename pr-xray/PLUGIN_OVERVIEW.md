@@ -23,6 +23,6 @@ PR content is untrusted, and a malicious PR can try to prompt-inject the agents 
 
 **With Codex, these agents have network access.** bb's Codex workspace sandbox always allows it and PR X-ray can't turn it off, so an injected agent could reach the internet, run `gh` with your login and read files on your machine. Other providers depend on their own sandbox and approval settings.
 
-Only analyse or chat about PRs whose author you trust.
+Only analyse or chat about PRs whose author you trust. PR X-ray asks you to confirm once per PR before an agent reads someone else's text.
 
 Fix agents can push to the PR branch. By default they read only your own comments. Fix all open comments also sends everyone else's, and on a public repo anyone can post one, so it asks you to confirm first.

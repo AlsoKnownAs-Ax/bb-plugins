@@ -28,7 +28,7 @@ PR titles, descriptions, diffs and branch files are untrusted, and a malicious P
 
 **With Codex, analysis and chat agents have network access.** bb's Codex workspace sandbox always allows it and PR X-ray can't turn it off, so an injected agent could reach the internet, run `gh` with your login and read files on your machine. Other providers depend on their own sandbox and approval settings, so don't treat those as a hard boundary either.
 
-Only analyse or chat about PRs whose author you trust. This matters most for PRs from people outside your team.
+Only analyse or chat about PRs whose author you trust. This matters most for PRs from people outside your team. PR X-ray asks you to confirm once per PR before an agent reads someone else's text.
 
 **Fix agents can push to the PR branch.** *Fix with agent* and *Fix my open comments* send only your own comments to the agent. *Fix all open comments* also sends everyone else's, and on a public repo anyone can post one, so it asks you to confirm first.
 
