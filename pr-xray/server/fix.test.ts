@@ -15,11 +15,11 @@ const pr = {
 } as PrDetails;
 const threads: ReviewThread[] = [];
 
-function fakeBb(spawn: ReturnType<typeof vi.fn>) {
+function fakeBb(spawn: ReturnType<typeof vi.fn>, remote = "https://github.com/acme/web.git") {
   const project = {
     id: "proj_web",
     name: "web",
-    gitRemoteUrl: "https://github.com/acme/web.git",
+    gitRemoteUrl: remote,
     sources: [{ type: "local_path", hostId: "host_1", path: "/code/web", isDefault: true }],
   };
   return {
@@ -48,6 +48,13 @@ describe("fix threads", () => {
     });
     await expect(fixDiffComments(fakeBb(spawn), pr, threads, new Map())).rejects.toThrow("no such branch");
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("are refused when no bb project holds the repository", async () => {
+    const spawn = vi.fn();
+    const bb = fakeBb(spawn, "https://github.com/acme/other.git");
+    await expect(fixDiffComments(bb, pr, threads, new Map())).rejects.toThrow("bb project");
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("are refused for forks", async () => {
