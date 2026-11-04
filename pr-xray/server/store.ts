@@ -86,8 +86,9 @@ interface AnalysisRow {
 const now = () => new Date().toISOString();
 
 /** Drafts saved before commits were recorded have no headSha; "" makes them count as written on an older commit. */
-function parseDraft(json: string): DraftComment {
-  return draftCommentSchema.parse({ headSha: "", ...JSON.parse(json) });
+function parseDraft(json: string): DraftComment | null {
+  const parsed = draftCommentSchema.safeParse({ headSha: "", ...JSON.parse(json) });
+  return parsed.success ? parsed.data : null;
 }
 
 function toComment(row: CommentRow): StoredComment {
@@ -301,7 +302,11 @@ export function createStore(bb: BbPluginApi) {
       const rows = db
         .prepare(`SELECT id, json, created_at FROM pending_comments WHERE key = ? ORDER BY created_at`)
         .all(prRefKey(ref)) as { id: string; json: string; created_at: string }[];
-      return rows.map((row) => ({ ...parseDraft(row.json), id: row.id, createdAt: row.created_at }));
+      return rows.flatMap((row) => {
+        const draft = parseDraft(row.json);
+        if (draft === null) bb.log.warn(`skipping invalid pending comment ${row.id}`);
+        return draft === null ? [] : [{ ...draft, id: row.id, createdAt: row.created_at }];
+      });
     },
 
     addPendingComment(ref: PrRef, comment: DraftComment): PendingComment {
@@ -318,8 +323,9 @@ export function createStore(bb: BbPluginApi) {
 
     updatePendingComment(id: string, changes: Partial<Pick<DraftComment, "body" | "headSha">>) {
       const row = db.prepare(`SELECT json FROM pending_comments WHERE id = ?`).get(id) as { json: string } | undefined;
-      if (row === undefined) return;
-      const comment = { ...parseDraft(row.json), ...changes };
+      const draft = row === undefined ? null : parseDraft(row.json);
+      if (draft === null) return;
+      const comment = { ...draft, ...changes };
       db.prepare(`UPDATE pending_comments SET json = ? WHERE id = ?`).run(JSON.stringify(comment), id);
     },
 

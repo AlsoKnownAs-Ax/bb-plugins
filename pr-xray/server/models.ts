@@ -23,7 +23,11 @@ export function createModels(bb: BbPluginApi) {
   async function pickerSeed(): Promise<ModelSelection | null> {
     const providers = await bb.sdk.providers.list();
     for (const provider of providers) {
-      const { models } = await bb.sdk.providers.models({ providerId: provider.id });
+      // One logged-out provider shouldn't hide the picker from the others.
+      const models = await bb.sdk.providers.models({ providerId: provider.id }).then(
+        (result) => result.models,
+        () => [],
+      );
       const model = models.find((candidate) => candidate.isDefault) ?? models[0];
       if (model !== undefined) {
         return { providerId: provider.id, model: model.model, reasoningLevel: model.defaultReasoningEffort };

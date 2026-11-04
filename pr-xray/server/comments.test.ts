@@ -89,10 +89,16 @@ describe("submitting a review", () => {
     expect(rows.current).toHaveLength(2);
   });
 
-  it("moves a draft the user keeps onto the latest commit", async () => {
+  it("moves a draft the user keeps onto the commit they checked it against", async () => {
     const { comments, store } = setup([draft("a", "old")]);
-    await comments.keepPending(ref, "a");
+    await comments.keepPending(ref, "a", "head");
     expect(store.updatePendingComment).toHaveBeenCalledWith("a", { headSha: "head" });
+  });
+
+  it("won't keep a draft when the PR moved past the commit the user checked", async () => {
+    const { comments, store } = setup([draft("a", "old")]);
+    await expect(comments.keepPending(ref, "a", "seen")).rejects.toThrow("new commits");
+    expect(store.updatePendingComment).not.toHaveBeenCalled();
   });
 
   it("posts a single comment on the commit it was written on", async () => {

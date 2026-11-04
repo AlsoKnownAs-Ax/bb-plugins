@@ -56,8 +56,10 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
     publish(ref);
   }
 
-  async function keepPending(ref: PrRef, id: string) {
-    store.updatePendingComment(id, { headSha: await github.headSha(ref) });
+  /** `checkedSha` is the commit the user compared the comment against, which must still be the latest. */
+  async function keepPending(ref: PrRef, id: string, checkedSha: string) {
+    if ((await github.headSha(ref)) !== checkedSha) throw new Error("This PR has new commits. Check the comment's line again.");
+    store.updatePendingComment(id, { headSha: checkedSha });
     publish(ref);
   }
 

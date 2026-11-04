@@ -145,7 +145,7 @@ export function displayGroups(data: ReviewGet): ReviewGroup[] {
     .map((file) => ({
       id: `file-${file.index}`,
       title: file.path,
-      why: "Analysis not ready yet; showing the diff by file.",
+      why: result ? "This analysis is too old to match to the new commits. Re-analyse to group them." : "Analysis not ready yet; showing the diff by file.",
       kind: "core" as const,
       hunkIds: file.hunkIds,
     }));
@@ -154,6 +154,12 @@ export function displayGroups(data: ReviewGet): ReviewGroup[] {
 /** A pending comment shows on its line only if it was written on this commit and the line is still in the diff. */
 export function draftInDiff(comment: PendingComment, headSha: string, hunks: Hunk[]): boolean {
   return comment.headSha === headSha && lineInHunks(hunks, comment.side, comment.line);
+}
+
+/** A comment from another commit can move to this one only if its whole line range is in the diff. */
+export function canKeepDraft(comment: PendingComment, headSha: string, hunks: Hunk[]): boolean {
+  if (comment.headSha === headSha || !lineInHunks(hunks, comment.side, comment.line)) return false;
+  return comment.startLine === null || lineInHunks(hunks, comment.startSide ?? comment.side, comment.startLine);
 }
 
 export function threadVisibleIn(thread: ReviewThread, path: string, hunks: Hunk[]): boolean {

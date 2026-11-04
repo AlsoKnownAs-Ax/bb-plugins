@@ -21,12 +21,14 @@ import type { DraftComment, FixScope, Hunk, PendingComment, PrFile, ReviewGroup,
 import { useAgentConfirmContext } from "./agent-confirm";
 import { Composer, PendingView, ThreadView } from "./comments";
 import { prRefKey } from "../shared/pr-ref";
-import { draftInDiff, firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
+import { canKeepDraft, draftInDiff, firstChangedLine, hunkFileDiff, hunkRange, sideLines, threadVisibleIn } from "./diff-utils";
 import { errorMessage, type ReviewGet, type Rpc } from "./useReview";
 
 export type ViewMode = "unified" | "split";
 
 interface DraftTarget {
+  /** The commit on screen when the line was picked: the line number only holds there. */
+  headSha: string;
   hunkId: string;
   path: string;
   range: SelectedLineRange;
@@ -242,7 +244,7 @@ export function DiffTab({
         const file = hunk ? files.get(hunk.fileIndex) : undefined;
         if (hunk && file) {
           const at = firstChangedLine(hunk);
-          setDraft({ hunkId: hunk.id, path: file.path, range: { start: at.line, end: at.line, side: toAnnotationSide(at.side) } });
+          setDraft({ headSha: pr.headSha, hunkId: hunk.id, path: file.path, range: { start: at.line, end: at.line, side: toAnnotationSide(at.side) } });
           event.preventDefault();
         }
       }
@@ -270,7 +272,7 @@ export function DiffTab({
     const start = Math.min(target.range.start, target.range.end);
     const end = Math.max(target.range.start, target.range.end);
     return {
-      headSha: pr.headSha,
+      headSha: target.headSha,
       path: target.path,
       line: end,
       side,
@@ -362,27 +364,13 @@ export function DiffTab({
             </div>
           ))}
           {looseDrafts.length > 0 ? (
-            <section id="pending-to-check" className="space-y-2">
-              <h2 className="text-base font-semibold">Pending comments to check</h2>
-              <p className="text-sm text-muted-foreground">These can't be posted as they are, because they were written on an older commit or their line left the diff.</p>
-              {looseDrafts.map((comment) => {
-                const canKeep = comment.headSha !== pr.headSha && lineInHunks(hunksOfPath(comment.path), comment.side, comment.line);
-                return (
-                  <div key={comment.id}>
-                    <div className="font-mono text-xs text-muted-foreground">
-                      {comment.path}:{comment.line}
-                    </div>
-                    <PendingView
-                      rpc={rpc}
-                      prRef={pr.ref}
-                      comment={comment}
-                      canKeep={canKeep}
-                      note={canKeep ? "Check that this line is still right, then keep it." : "This line left the diff. Copy the text if you need it, then delete it."}
-                    />
-                  </div>
-                );
-              })}
-            </section>
+            <button
+              type="button"
+              className="mt-2 w-full rounded-md px-2 py-1.5 text-left text-xs text-warning-text hover:bg-state-hover"
+              onClick={() => scrollTo("pending-to-check")}
+            >
+              {looseDrafts.length} pending comment{looseDrafts.length === 1 ? "" : "s"} to check
+            </button>
           ) : null}
           {otherThreads.length > 0 ? (
             <button
@@ -475,6 +463,29 @@ export function DiffTab({
             </section>
             );
           })}
+          {looseDrafts.length > 0 ? (
+            <section id="pending-to-check" className="space-y-2">
+              <h2 className="text-base font-semibold">Pending comments to check</h2>
+              <p className="text-sm text-muted-foreground">These can't be posted as they are, because they were written on an older commit or their line left the diff.</p>
+              {looseDrafts.map((comment) => {
+                const canKeep = canKeepDraft(comment, pr.headSha, hunksOfPath(comment.path));
+                return (
+                  <div key={comment.id}>
+                    <div className="font-mono text-xs text-muted-foreground">
+                      {comment.path}:{comment.line}
+                    </div>
+                    <PendingView
+                      rpc={rpc}
+                      prRef={pr.ref}
+                      comment={comment}
+                      keepOnSha={canKeep ? pr.headSha : null}
+                      note={canKeep ? "Check that this line is still right, then keep it." : "This line left the diff. Copy the text if you need it, then delete it."}
+                    />
+                  </div>
+                );
+              })}
+            </section>
+          ) : null}
           {otherThreads.length > 0 ? (
             <section id="other-threads" className="space-y-2">
               <h2 className="text-base font-semibold">Conversations outside the diff</h2>
@@ -492,7 +503,7 @@ export function DiffTab({
         </div>
       </div>
 
-      <SubmitReviewDialog open={submitOpen} onOpenChange={setSubmitOpen} data={data} rpc={rpc} />
+      <SubmitReviewDialog open={submitOpen} onOpenChange={setSubmitOpen} data={data} rpc={rpc} blockedDrafts={looseDrafts.length} />
       <Dialog open={fullFile !== null} onOpenChange={(open) => !open && setFullFile(null)}>
         <DialogContent className="max-h-[85vh] max-w-5xl overflow-hidden">
           <DialogHeader>
@@ -826,10 +837,10 @@ function HunkDiff({
         const current = selectionRef.current;
         const useSelection =
           current !== null && range.start >= Math.min(current.start, current.end) && range.start <= Math.max(current.start, current.end);
-        setDraft({ hunkId: hunk.id, path: file.path, range: useSelection ? current : range });
+        setDraft({ headSha: pr.headSha, hunkId: hunk.id, path: file.path, range: useSelection ? current : range });
       },
     }),
-    [codeTheme.mode, codeTheme.name, file.path, hunk.id, setDraft, view],
+    [codeTheme.mode, codeTheme.name, file.path, hunk.id, pr.headSha, setDraft, view],
   );
 
   const renderAnnotation = useCallback(
@@ -916,11 +927,13 @@ function SubmitReviewDialog({
   onOpenChange,
   data,
   rpc,
+  blockedDrafts,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: ReviewGet;
   rpc: Rpc;
+  blockedDrafts: number;
 }) {
   const [body, setBody] = useState("");
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
@@ -929,8 +942,7 @@ function SubmitReviewDialog({
   const own = data.pr.isOwnPr;
   const submittedEvent = own ? "COMMENT" : event;
   // GitHub only accepts an empty review when it is an approval.
-  const staleDrafts = data.pending.filter((comment) => comment.headSha !== data.pr.headSha).length;
-  const canSubmit = staleDrafts === 0 && (submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "");
+  const canSubmit = blockedDrafts === 0 && (submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "");
   const submit = async () => {
     setBusy(true);
     try {
@@ -956,8 +968,8 @@ function SubmitReviewDialog({
           <DialogTitle>Submit review</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          {staleDrafts > 0
-            ? `${staleDrafts} pending comment${staleDrafts === 1 ? " was" : "s were"} written on an older commit. Keep or delete ${staleDrafts === 1 ? "it" : "them"} under "Pending comments to check" before you submit.`
+          {blockedDrafts > 0
+            ? `${blockedDrafts} pending comment${blockedDrafts === 1 ? " needs" : "s need"} checking first. Keep or delete ${blockedDrafts === 1 ? "it" : "them"} under "Pending comments to check" before you submit.`
             : `${data.pending.length} pending comment${data.pending.length === 1 ? "" : "s"} will be posted to GitHub.`}
         </p>
         <VoiceInputTextarea

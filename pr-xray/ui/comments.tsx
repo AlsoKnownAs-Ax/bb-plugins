@@ -370,13 +370,14 @@ export function PendingView({
   prRef,
   comment,
   note = "Part of your review; posted when you submit.",
-  canKeep = false,
+  keepOnSha = null,
 }: {
   rpc: Rpc;
   prRef: PrRef;
   comment: PendingComment;
   note?: string;
-  canKeep?: boolean;
+  /** The commit the user checked this comment against, when it can move there. */
+  keepOnSha?: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   if (editing) {
@@ -406,12 +407,12 @@ export function PendingView({
         <span className="rounded border border-warning/70 px-1.5 font-medium text-warning-text">pending</span>
         <span>{note}</span>
         <span className="ml-auto flex gap-1">
-          {canKeep ? (
+          {keepOnSha !== null ? (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => {
-                rpc.call("comment.pendingKeep", { ref: prRef, id: comment.id }).catch((error: unknown) => toast.error(errorMessage(error)));
+                rpc.call("comment.pendingKeep", { ref: prRef, id: comment.id, headSha: keepOnSha }).catch((error: unknown) => toast.error(errorMessage(error)));
               }}
             >
               Keep on latest commit

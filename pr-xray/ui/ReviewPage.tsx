@@ -33,9 +33,14 @@ function FocusFrame({ focus, children }: { focus: boolean; children: ReactNode }
     return element;
   });
   useLayoutEffect(() => {
+    // Moving a node resets its scroll position and focus, so put them back.
+    const active = document.activeElement;
+    const scrolled = Array.from(frame.querySelectorAll("*")).filter((element) => element.scrollTop > 0).map((element) => [element, element.scrollTop] as const);
     (focus ? document.body : slot.current)?.append(frame);
-    return () => frame.remove();
+    for (const [element, top] of scrolled) element.scrollTop = top;
+    if (active instanceof HTMLElement && frame.contains(active)) active.focus();
   }, [focus, frame]);
+  useLayoutEffect(() => () => frame.remove(), [frame]);
   return (
     <div ref={slot} className={PAGE_FRAME_CLASS}>
       {createPortal(

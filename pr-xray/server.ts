@@ -88,6 +88,17 @@ export default async function plugin(bb: BbPluginApi) {
     return { pr, analysis: latest?.headSha === pr.headSha ? latest : null };
   }
 
+  /** These can fail because the page shows an old commit, so a failure also refreshes the page. */
+  async function showingNewCommits<T>(ref: PrRef, task: () => Promise<T>): Promise<T> {
+    try {
+      return await task();
+    } catch (error) {
+      invalidate(ref);
+      comments.publish(ref);
+      throw error;
+    }
+  }
+
   function startFix(pr: PrDetails, threads: ReviewThread[], scope: FixScope) {
     const tags = new Map<number, string>();
     for (const thread of threads) {
@@ -172,8 +183,8 @@ export default async function plugin(bb: BbPluginApi) {
       comments.publish(ref);
       return { ok: true };
     },
-    async "comment.pendingKeep"({ ref, id }) {
-      await comments.keepPending(ref, id);
+    async "comment.pendingKeep"({ ref, id, headSha }) {
+      await showingNewCommits(ref, () => comments.keepPending(ref, id, headSha));
       return { ok: true };
     },
     "comment.pendingRemove"({ ref, id }) {
@@ -182,7 +193,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true };
     },
     async "review.submit"({ ref, event, body }) {
-      const result = await comments.submitReview(ref, event, body);
+      const result = await showingNewCommits(ref, () => comments.submitReview(ref, event, body));
       invalidate(ref);
       return result;
     },

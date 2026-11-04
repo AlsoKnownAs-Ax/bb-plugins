@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewGet } from "../shared/contract";
 import type { Hunk, PendingComment, ReviewGroup } from "../shared/schema";
-import { displayGroups, draftInDiff, firstChangedLine, hunkRange, lineInHunks, sideLines } from "./diff-utils";
+import { canKeepDraft, displayGroups, draftInDiff, firstChangedLine, hunkRange, lineInHunks, sideLines } from "./diff-utils";
 
 function hunk(header: string, body: string[]): Hunk {
   return { id: "h1", path: "a.ts", header, patch: [header, ...body].join("\n"), fingerprint: "f1" } as unknown as Hunk;
@@ -56,11 +56,19 @@ describe("reading path after new commits", () => {
   it("falls back to files when an old analysis saved no fingerprints", () => {
     const groups = displayGroups(review([["f0h0", "logic"]], [group("noise", "noise", "f0h0")], null));
     expect(groups.map((g) => [g.id, g.hunkIds])).toEqual([["file-0", ["f0h0"]]]);
+    expect(groups[0]!.why).toContain("too old");
   });
 });
 
 describe("where a pending comment shows", () => {
-  const comment = { side: "RIGHT", line: 11, headSha: "head" } as PendingComment;
+  const comment = { side: "RIGHT", line: 11, headSha: "head", startLine: null, startSide: null } as PendingComment;
+
+  it("can be kept on a newer commit only if its whole range is in the diff", () => {
+    expect(canKeepDraft(comment, "newer", [sample])).toBe(true);
+    expect(canKeepDraft({ ...comment, startLine: 2, startSide: "RIGHT" }, "newer", [sample])).toBe(false);
+    expect(canKeepDraft({ ...comment, startLine: 10, startSide: "RIGHT" }, "newer", [sample])).toBe(true);
+    expect(canKeepDraft(comment, "head", [sample])).toBe(false);
+  });
 
   it("shows inline when written on this commit and the line is in the diff", () => {
     expect(draftInDiff(comment, "head", [sample])).toBe(true);

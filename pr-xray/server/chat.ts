@@ -70,7 +70,7 @@ function contextDocument(pr: PrDetails, analysis: AnalysisRecord | null): string
       for (const comment of thread.comments) parts.push(`@${comment.author}: ${stripMarker(comment.body).slice(0, 2000)}`);
     }
   }
-  parts.push("", "## Diff (hunk ids match the groups above)", annotatedDiff(pr));
+  parts.push("", analysis?.headSha === pr.headSha ? "## Diff (hunk ids match the groups above)" : "## Diff", annotatedDiff(pr));
   return parts.join("\n");
 }
 
