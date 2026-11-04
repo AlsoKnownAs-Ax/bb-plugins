@@ -1,8 +1,7 @@
 // Runs PR analysis in a hidden bb agent thread. The worker reads the diff,
 // the linked Notion ticket and the repository, then hands its result back
 // through the `pr_xray_submit_analysis` tool, which validates it.
-import { mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -14,6 +13,7 @@ import { spawnModelArgs } from "./models";
 import type { Store } from "./store";
 import { sweepWorkerBranches } from "./worker-branches";
 import { spawnPrWorker } from "./worker-environment";
+import { createWorkerDir, removeThreadDir, removeWorkerDir } from "./worker-files";
 
 export const ANALYSIS_TOOL = "pr_xray_submit_analysis";
 export const ANALYSIS_CHANGED = "analysis-changed";
@@ -153,6 +153,7 @@ export function createAnalysis(deps: {
   }
 
   async function cleanupWorker(threadId: string) {
+    await removeThreadDir(bb, threadId);
     try {
       await bb.sdk.threads.archive({ threadId });
     } catch (error) {
@@ -211,9 +212,10 @@ export function createAnalysis(deps: {
     snapshots.set(analysisId, pr);
     publish(ref);
 
+    let tempDir: string | undefined;
     try {
-      const dir = join(tmpdir(), "pr-xray");
-      await mkdir(dir, { recursive: true });
+      const dir = await createWorkerDir();
+      tempDir = dir;
       const diffPath = join(dir, `${analysisId}.diff`);
       await writeFile(diffPath, annotatedDiff(pr), "utf8");
 
@@ -223,13 +225,14 @@ export function createAnalysis(deps: {
         title: `PR X-ray: ${ref.owner}/${ref.repo}#${ref.number}`,
         visibility: "hidden",
         permissionMode: "auto",
-        pluginMetadata: { role: "analysis", analysisId },
+        pluginMetadata: { role: "analysis", analysisId, tempDir: dir },
         ...spawnModelArgs(selection),
       }));
       store.setAnalysisWorker(analysisId, worker.id);
       if (!hasRepo) store.markAnalysisDiffOnly(analysisId);
       publish(ref);
     } catch (error) {
+      await removeWorkerDir(tempDir);
       store.failAnalysis(analysisId, `Could not start the analysis: ${String(error instanceof Error ? error.message : error)}`);
       snapshots.delete(analysisId);
       publish(ref);
