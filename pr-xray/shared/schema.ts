@@ -230,6 +230,9 @@ export const storedCommentSchema = z.object({
 });
 export type StoredComment = z.infer<typeof storedCommentSchema>;
 
+export const fixScopeSchema = z.enum(["mine", "all"]);
+export type FixScope = z.infer<typeof fixScopeSchema>;
+
 export const modelSelectionSchema = z.object({
   providerId: z.string(),
   model: z.string(),

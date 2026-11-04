@@ -4,7 +4,7 @@ Read your own pull request the way a reviewer will, and fix what you find before
 
 - **Diff tab**: hunks grouped by concern and ordered as a reading path, with lockfiles and renames last. Viewed checkmarks, split or unified view, and GitHub-style inline comments, reviews, suggestions, replies and resolve.
 - **Explain tab**: a summary, a walkthrough, spots to look at closely, and interactive diagrams. Click a diagram node to leave a design comment, which stays in bb.
-- **Fix with agents**: fix one thread, all your open review comments, or redesign from your diagram comments. The redesign plans first and waits for your approval.
+- **Fix with agents**: fix one thread, your open review comments, all open comments, or redesign from your diagram comments. The redesign plans first and waits for your approval.
 - **Retro feed**: tag comments yourself or with AI, then export them with `bb pr-xray comments --json`.
 
 ## How to open it
@@ -24,3 +24,5 @@ PR content is untrusted, and a malicious PR can try to prompt-inject the agents 
 **With Codex, these agents have network access.** bb's Codex workspace sandbox always allows it and PR X-ray can't turn it off, so an injected agent could reach the internet, run `gh` with your login and read files on your machine. Other providers depend on their own sandbox and approval settings.
 
 Only analyse or chat about PRs whose author you trust.
+
+Fix agents can push to the PR branch. By default they read only your own comments. Fix all open comments also sends everyone else's, and on a public repo anyone can post one, so it asks you to confirm first.

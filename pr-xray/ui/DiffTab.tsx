@@ -12,11 +12,12 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { DraftComment, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
+import { threadsToFix } from "../shared/fix-scope";
+import type { DraftComment, FixScope, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
 import { Composer, PendingView, ThreadView } from "./comments";
 import { prRefKey } from "../shared/pr-ref";
 import { firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
@@ -113,6 +114,7 @@ export function DiffTab({
   }, [data.comments]);
   const [draft, setDraft] = useState<DraftTarget | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [confirmFixAll, setConfirmFixAll] = useState(false);
   const [fullFile, setFullFile] = useState<{ file: PrFile; content: string | null; loading: boolean } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeHunk, setActiveHunk] = useState<string | null>(null);
@@ -313,11 +315,11 @@ export function DiffTab({
     }
   };
 
-  const fixAll = async () => {
+  const fixComments = async (scope: FixScope) => {
     try {
-      const { threadId } = await rpc.call("fix.allDiff", { ref: pr.ref });
+      const { threadId } = await rpc.call("fix.allDiff", { ref: pr.ref, scope });
       // Stay on the review; the fix runs in the background.
-      toast.success("Started a thread to fix your open comments", {
+      toast.success(scope === "mine" ? "Started a thread to fix your open comments" : "Started a thread to fix all open comments", {
         action: { label: "Open", onClick: () => navigate.toThread(threadId) },
       });
     } catch (error) {
@@ -328,9 +330,8 @@ export function DiffTab({
   const viewedCount = groups.filter((group) => viewed.has(group.id)).length;
   const firstUpdated = groups.find((group) => updatedPaths(group).length > 0);
   const updatedCount = new Set(groups.flatMap(updatedPaths)).size;
-  const myOpenThreads = pr.threads.filter(
-    (thread) => !thread.isResolved && thread.comments.some((comment) => comment.author.toLowerCase() === pr.viewer.toLowerCase()),
-  ).length;
+  const myOpenThreads = threadsToFix(pr.threads, pr.viewer, "mine").length;
+  const allOpenThreads = threadsToFix(pr.threads, pr.viewer, "all").length;
 
   return (
     <div className="flex h-full min-h-0">
@@ -398,9 +399,13 @@ export function DiffTab({
             <Icon name="Sent" />
             {data.pending.length > 0 ? `Submit review (${data.pending.length})` : "Submit review"}
           </Button>
-          <Button className="w-full" size="sm" variant="outline" disabled={myOpenThreads === 0} onClick={() => void fixAll()}>
+          <Button className="w-full" size="sm" variant="outline" disabled={myOpenThreads === 0} onClick={() => void fixComments("mine")}>
             <Icon name="Bot" />
-            Fix all open comments{myOpenThreads ? ` (${myOpenThreads})` : ""}
+            Fix my open comments{myOpenThreads ? ` (${myOpenThreads})` : ""}
+          </Button>
+          <Button className="w-full" size="sm" variant="outline" disabled={allOpenThreads === 0} onClick={() => setConfirmFixAll(true)}>
+            <Icon name="Bot" />
+            Fix all open comments{allOpenThreads ? ` (${allOpenThreads})` : ""}
           </Button>
           <p className="text-[11px] text-muted-foreground">j/k hunks · n/p groups · c comment</p>
         </div>
@@ -488,6 +493,29 @@ export function DiffTab({
       </div>
 
       <SubmitReviewDialog open={submitOpen} onOpenChange={setSubmitOpen} data={data} rpc={rpc} />
+      <Dialog open={confirmFixAll} onOpenChange={setConfirmFixAll}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Fix all open comments?</DialogTitle>
+            <DialogDescription>
+              An agent that can push to this branch will read every open comment, including comments from other people. On a public repo anyone can post a comment, and its text could prompt-inject the agent. Continue only if you trust everyone who commented.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmFixAll(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmFixAll(false);
+                void fixComments("all");
+              }}
+            >
+              Fix all comments
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={fullFile !== null} onOpenChange={(open) => !open && setFullFile(null)}>
         <DialogContent className="max-h-[85vh] max-w-5xl overflow-hidden">
           <DialogHeader>

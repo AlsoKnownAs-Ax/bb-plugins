@@ -4,12 +4,13 @@ import { type BbPluginApi, PluginCliError, cliCommand, defineCli } from "@get-bb
 import { z } from "zod";
 import { rpcContract } from "./shared/contract";
 import { parsePrRef, prRefKey, prRefToSubPath, REVIEW_PANEL_PATH } from "./shared/pr-ref";
-import type { PrDetails, PrRef } from "./shared/schema";
+import { threadsToFix } from "./shared/fix-scope";
+import type { PrDetails, PrRef, ReviewThread } from "./shared/schema";
 import { agentTools, REVIEW_TOOL } from "./server/agent-tools";
 import { createAnalysis, findTicketUrl } from "./server/analysis";
 import { chatInstructions, createChat } from "./server/chat";
 import { createComments } from "./server/comments";
-import { fixDiagramComments, fixDiffComments, fixSingleComment } from "./server/fix";
+import { fixDiagramComments, fixDiffComments } from "./server/fix";
 import { createGithub, GithubError } from "./server/github";
 import { createModels } from "./server/models";
 import { createStore } from "./server/store";
@@ -85,6 +86,17 @@ export default async function plugin(bb: BbPluginApi) {
     // The user starts the analysis from the review page; opening only reports an existing one.
     const latest = store.latestAnalysis(ref, pr.headSha);
     return { pr, analysis: latest?.headSha === pr.headSha ? latest : null };
+  }
+
+  function startFix(pr: PrDetails, threads: ReviewThread[]) {
+    const tags = new Map<number, string>();
+    for (const thread of threads) {
+      for (const comment of thread.comments) {
+        const tag = store.commentByGithubId(comment.databaseId)?.tag;
+        if (tag) tags.set(comment.databaseId, tag);
+      }
+    }
+    return fixDiffComments(bb, pr, threads, tags);
   }
 
   bb.rpc.register(rpcContract, {
@@ -224,26 +236,17 @@ export default async function plugin(bb: BbPluginApi) {
       const pr = await loadPr(ref, true);
       const thread = pr.threads.find((candidate) => candidate.id === threadId);
       if (!thread) throw new Error("That review thread no longer exists.");
-      const first = thread.comments[0];
-      const tag = first ? (store.commentByGithubId(first.databaseId)?.tag ?? null) : null;
-      return fixSingleComment(bb, pr, thread, tag);
+      const mine = threadsToFix([thread], pr.viewer, "mine");
+      if (mine.length === 0) throw new Error("You have no unresolved comments on that thread.");
+      return startFix(pr, mine);
     },
-    async "fix.allDiff"({ ref }) {
+    async "fix.allDiff"({ ref, scope }) {
       const pr = await loadPr(ref, true);
-      const open = pr.threads.filter(
-        (thread) =>
-          !thread.isResolved &&
-          thread.comments.some((comment) => comment.author.toLowerCase() === pr.viewer.toLowerCase()),
-      );
-      if (open.length === 0) throw new Error("There are no unresolved review threads with your comments.");
-      const tags = new Map<number, string>();
-      for (const thread of open) {
-        for (const comment of thread.comments) {
-          const tag = store.commentByGithubId(comment.databaseId)?.tag;
-          if (tag) tags.set(comment.databaseId, tag);
-        }
+      const threads = threadsToFix(pr.threads, pr.viewer, scope);
+      if (threads.length === 0) {
+        throw new Error(scope === "mine" ? "There are no unresolved review threads with your comments." : "There are no unresolved review threads.");
       }
-      return fixDiffComments(bb, pr, open, tags);
+      return startFix(pr, threads);
     },
     async "fix.allDiagram"({ ref }) {
       const pr = await loadPr(ref, true);

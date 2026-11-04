@@ -5,6 +5,7 @@ import {
   analysisRecordSchema,
   commentTagSchema,
   draftCommentSchema,
+  fixScopeSchema,
   modelPurposeSchema,
   modelSelectionSchema,
   pendingCommentSchema,
@@ -141,7 +142,7 @@ export const rpcContract = defineRpcContract({
     output: threadOut,
   },
   "fix.allDiff": {
-    input: z.object({ ref: prRefSchema }),
+    input: z.object({ ref: prRefSchema, scope: fixScopeSchema }),
     output: threadOut,
   },
   "fix.allDiagram": {

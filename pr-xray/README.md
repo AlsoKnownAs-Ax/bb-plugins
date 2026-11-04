@@ -4,7 +4,7 @@ Self-review GitHub pull requests before asking for review:
 
 - **Diff tab**: hunks grouped by concern and ordered as a reading path (noise last), with viewed checkmarks, split/unified view and GitHub-style inline comments: single comments, start/submit a review, suggestions, replies, editing your posted comments and resolve.
 - **Explain tab**: a summary informed by the linked Notion ticket and its parent project, a walkthrough, "where to look closely", and interactive diagrams. Click a node to leave a design comment (kept in bb only).
-- **Fix with agents**: fix one thread, fix all your open review comments, or redesign from all diagram comments (plan first, then waits for your approval). Each start shows a toast with a link to the thread.
+- **Fix with agents**: fix one thread, fix your open review comments, fix all open comments, or redesign from all diagram comments (plan first, then waits for your approval). Each start shows a toast with a link to the thread.
 - **Retro feed**: tag comments yourself or click “AI tag”; `bb pr-xray comments --json` exports them.
 
 ## Install
@@ -29,6 +29,8 @@ PR titles, descriptions, diffs and branch files are untrusted, and a malicious P
 **With Codex, analysis and chat agents have network access.** bb's Codex workspace sandbox always allows it and PR X-ray can't turn it off, so an injected agent could reach the internet, run `gh` with your login and read files on your machine. Other providers depend on their own sandbox and approval settings, so don't treat those as a hard boundary either.
 
 Only analyse or chat about PRs whose author you trust. This matters most for PRs from people outside your team.
+
+**Fix agents can push to the PR branch.** *Fix with agent* and *Fix my open comments* send only your own comments to the agent. *Fix all open comments* also sends everyone else's, and on a public repo anyone can post one, so it asks you to confirm first.
 
 ## `bb pr-xray comments --json`
 
