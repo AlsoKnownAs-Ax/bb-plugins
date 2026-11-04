@@ -12,6 +12,7 @@ import type { Models } from "./models";
 import { spawnModelArgs } from "./models";
 import type { Store } from "./store";
 import { sweepWorkerBranches } from "./worker-branches";
+import { orNullIfGone } from "./sdk-errors";
 import { spawnPrWorker } from "./worker-environment";
 import { createWorkerDir, removeThreadDir, removeWorkerDir } from "./worker-files";
 
@@ -164,6 +165,7 @@ export function createAnalysis(deps: {
     } catch {
       // Already stopped.
     }
+    store.markWorkerCleaned(threadId);
   }
 
   /**
@@ -177,7 +179,9 @@ export function createAnalysis(deps: {
       const age = Date.now() - Date.parse(record.createdAt);
       let reason: string | null = null;
       if (record.workerThreadId) {
-        const thread = await bb.sdk.threads.get({ threadId: record.workerThreadId }).catch(() => null);
+        // A temporary failure says nothing about the worker: check again next time.
+        const thread = await orNullIfGone(() => bb.sdk.threads.get({ threadId: record.workerThreadId! })).catch(() => undefined);
+        if (thread === undefined) continue;
         if (thread === null || thread.deletedAt !== null || thread.archivedAt !== null) {
           reason = "The analysis agent is gone. Try again.";
         } else if (thread.status === "error") {
@@ -196,6 +200,9 @@ export function createAnalysis(deps: {
       changed = true;
       if (record.workerThreadId) await cleanupWorker(record.workerThreadId);
     }
+    // A restart can miss the event that cleans up after a finished worker.
+    const graceEnd = new Date(Date.now() - IDLE_GRACE_MS).toISOString();
+    for (const threadId of store.workersToClean(graceEnd)) await cleanupWorker(threadId);
     return changed;
   }
 

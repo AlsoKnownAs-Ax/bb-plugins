@@ -15,7 +15,11 @@ const pr = {
 } as PrDetails;
 const threads: ReviewThread[] = [];
 
-function fakeBb(spawn: ReturnType<typeof vi.fn>, remote = "https://github.com/acme/web.git") {
+function fakeBb(
+  spawn: ReturnType<typeof vi.fn>,
+  remote = "https://github.com/acme/web.git",
+  thread: unknown = { status: "active", environmentId: "env_1" },
+) {
   const project = {
     id: "proj_web",
     name: "web",
@@ -26,7 +30,7 @@ function fakeBb(spawn: ReturnType<typeof vi.fn>, remote = "https://github.com/ac
     log: { warn: vi.fn() },
     sdk: {
       projects: { list: vi.fn(async () => [project]) },
-      threads: { spawn },
+      threads: { spawn, get: vi.fn(async () => thread), archive: vi.fn(async () => ({})) },
     },
   } as unknown as BbPluginApi;
 }
@@ -48,6 +52,13 @@ describe("fix threads", () => {
     });
     await expect(fixDiffComments(fakeBb(spawn), pr, threads, new Map())).rejects.toThrow("no such branch");
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("report a worktree that fails after spawn, and leave no thread behind", async () => {
+    const spawn = vi.fn(async () => ({ id: "thr_1" }));
+    const bb = fakeBb(spawn, undefined, { status: "error", environmentId: null });
+    await expect(fixDiffComments(bb, pr, threads, new Map())).rejects.toThrow("worktree");
+    expect(bb.sdk.threads.archive).toHaveBeenCalledWith({ threadId: "thr_1" });
   });
 
   it("are refused when no bb project holds the repository", async () => {

@@ -46,12 +46,13 @@ export function prWorktreeEnvironment(hostId: string, headRef: string) {
  * afterwards: the thread errors without ever getting an environment. Past the
  * timeout the worker counts as started, and any later failure is reported as one.
  */
-async function provisioningFailed(bb: BbPluginApi, threadId: string, timing: ProvisioningTiming): Promise<boolean> {
+export async function provisioningFailed(bb: BbPluginApi, threadId: string, timing = PROVISIONING_TIMING): Promise<boolean> {
   const deadline = Date.now() + timing.timeoutMs;
   while (Date.now() < deadline) {
     const thread = await bb.sdk.threads.get({ threadId });
     if (thread.status === "error") return thread.environmentId === null;
-    if (thread.status === "active" || thread.status === "idle") return false;
+    // The status can read active or idle before the worktree exists, so only an environment proves it.
+    if (thread.environmentId !== null && (thread.status === "active" || thread.status === "idle")) return false;
     await new Promise((resolve) => setTimeout(resolve, timing.pollMs));
   }
   return false;
@@ -71,20 +72,28 @@ export async function spawnPrWorker(
   const project = await findProject(bb, pr.ref);
   const target = prWorktreeTarget(project, pr);
   if (target !== null) {
+    let spawned: string | null = null;
     try {
       const thread = await bb.sdk.threads.spawn({
         ...buildInput(true),
         projectId: target.projectId,
         environment: prWorktreeEnvironment(target.hostId, pr.headRef),
       });
+      spawned = thread.id;
       if (!(await provisioningFailed(bb, thread.id, timing))) {
-        if (project?.path) await trackWorkerBranch(bb, thread.id, project.path);
+        // A branch left behind is a smaller problem than throwing away a healthy worker.
+        if (project?.path) {
+          await trackWorkerBranch(bb, thread.id, project.path).catch((error: unknown) => bb.log.warn(`track branch of ${thread.id}: ${String(error)}`));
+        }
         return { thread, hasRepo: true };
       }
       bb.log.warn(`worktree on ${pr.headRef} failed, continuing without a repository`);
-      await bb.sdk.threads.archive({ threadId: thread.id });
     } catch (error) {
       bb.log.warn(`worktree on ${pr.headRef} failed, continuing without a repository: ${String(error)}`);
+    }
+    if (spawned !== null) {
+      const threadId = spawned;
+      await bb.sdk.threads.archive({ threadId }).catch((error: unknown) => bb.log.warn(`archive worker ${threadId}: ${String(error)}`));
     }
   }
   const thread = await bb.sdk.threads.spawn({

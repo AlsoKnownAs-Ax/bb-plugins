@@ -88,6 +88,8 @@ describe("the analysis diff", () => {
     const record = { id: "an_1", ref, status: "done", workerThreadId: "thr_1" };
     const store = {
       runningAnalyses: () => [],
+      workersToClean: () => [],
+      markWorkerCleaned: vi.fn(),
       latestAnalysis: () => null,
       ticketOverride: () => null,
       createAnalysis: () => "an_1",
@@ -126,6 +128,28 @@ describe("the analysis diff", () => {
   });
 });
 
+describe("a finished analysis whose worker was never cleaned up", () => {
+  it("gets cleaned up by the next reconcile", async () => {
+    const fake = fakeBb();
+    const store = {
+      runningAnalyses: () => [],
+      workersToClean: vi.fn(() => ["thr_old"]),
+      markWorkerCleaned: vi.fn(),
+    };
+    const analysis = createAnalysis({
+      bb: fake.bb,
+      store,
+      github: {},
+      models: {},
+      settings: async () => ({}),
+      onDiagramNodesChanged: vi.fn(),
+    } as unknown as Parameters<typeof createAnalysis>[0]);
+    await analysis.reconcile();
+    expect(fake.bb.sdk.threads.archive).toHaveBeenCalledWith({ threadId: "thr_old" });
+    expect(store.markWorkerCleaned).toHaveBeenCalledWith("thr_old");
+  });
+});
+
 describe("the chat context", () => {
   function setup() {
     const fake = fakeBb();
@@ -147,5 +171,26 @@ describe("the chat context", () => {
     expect(chatInstructions(stored)).toContain("context.md");
     await chat.reset(ref);
     expect(existsSync(dir)).toBe(false);
+  });
+
+  it("does not destroy a healthy chat on a temporary failure", async () => {
+    const { chat, bb, metadata } = setup();
+    await chat.start(ref, "Why?");
+    const dir = metadata.get("thr_1")?.tempDir as string;
+    vi.spyOn(bb.sdk.threads, "getPluginMetadata").mockRejectedValueOnce(new Error("HTTP 503: restarting"));
+    await expect(chat.get(ref)).rejects.toThrow("503");
+    expect(bb.sdk.threads.archive).not.toHaveBeenCalled();
+    expect(await chat.get(ref)).toBe("thr_1");
+    expect(existsSync(dir)).toBe(true);
+    await chat.reset(ref);
+  });
+
+  it("starts one chat when two questions arrive together", async () => {
+    const { chat, bb, spawn } = setup();
+    const ids = await Promise.all([chat.start(ref, "One?"), chat.start(ref, "Two?")]);
+    expect(ids).toEqual(["thr_1", "thr_1"]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(bb.sdk.threads.send).toHaveBeenCalledOnce();
+    await chat.reset(ref);
   });
 });

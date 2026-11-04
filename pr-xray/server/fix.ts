@@ -3,7 +3,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { PrDetails, ReviewThread, StoredComment } from "../shared/schema";
 import { stripMarker } from "./comments";
 import { findProject } from "./projects";
-import { prWorktreeEnvironment } from "./worker-environment";
+import { provisioningFailed, prWorktreeEnvironment, prWorktreeTarget } from "./worker-environment";
 
 export interface FixThread {
   threadId: string;
@@ -20,17 +20,21 @@ async function spawnFix(bb: BbPluginApi, pr: PrDetails, title: string, prompt: s
   if (!pr.headInBaseRepo) {
     throw new Error("Fixing with agents is not available for pull requests from forks.");
   }
-  const project = await findProject(bb, pr.ref);
-  if (!project?.hostId) throw new Error("Add this repository as a bb project first, so the fix can run in a worktree of the PR branch.");
+  const target = prWorktreeTarget(await findProject(bb, pr.ref), pr);
+  if (target === null) throw new Error("Add this repository as a bb project first, so the fix can run in a worktree of the PR branch.");
   // An isolated worktree keeps the user's checkout untouched. If it can't be
   // created the error reaches the user: never fall back to that checkout.
   const thread = await bb.sdk.threads.spawn({
-    projectId: project.projectId,
+    projectId: target.projectId,
     prompt,
     title,
     pluginMetadata: { role: "fix", pr: `${pr.ref.owner}/${pr.ref.repo}#${pr.ref.number}` },
-    environment: prWorktreeEnvironment(project.hostId, pr.headRef),
+    environment: prWorktreeEnvironment(target.hostId, pr.headRef),
   });
+  if (await provisioningFailed(bb, thread.id)) {
+    await bb.sdk.threads.archive({ threadId: thread.id }).catch(() => undefined);
+    throw new Error(`Could not create a worktree of ${pr.headRef}. Check that the branch still exists.`);
+  }
   return { threadId: thread.id };
 }
 

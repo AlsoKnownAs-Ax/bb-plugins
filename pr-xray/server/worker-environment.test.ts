@@ -49,6 +49,37 @@ describe("prWorktreeTarget", () => {
 });
 
 describe("spawnPrWorker", () => {
+  it("archives the first worker when a check after spawn throws", async () => {
+    const spawn = vi.fn(async () => ({ id: "thr_1" }));
+    const get = vi.fn(async () => {
+      throw new Error("daemon restarting");
+    });
+    const bb = fakeBb(spawn, [webProject], get);
+    const result = await spawnPrWorker(bb, pr, () => input, fastTiming);
+    expect(result.hasRepo).toBe(false);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(bb.sdk.threads.archive).toHaveBeenCalledWith({ threadId: "thr_1" });
+  });
+
+  it("keeps a healthy worker when branch tracking fails", async () => {
+    const spawn = vi.fn(async () => ({ id: "thr_1" }));
+    const bb = fakeBb(spawn);
+    vi.mocked(bb.storage.kv.set).mockRejectedValueOnce(new Error("kv down"));
+    const result = await spawnPrWorker(bb, pr, () => input, fastTiming);
+    expect(result.hasRepo).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps waiting while the thread is active but has no worktree yet", async () => {
+    const spawn = vi.fn(async () => ({ id: "thr_1" }));
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "active", environmentId: null })
+      .mockResolvedValue({ status: "error", environmentId: null });
+    const result = await spawnPrWorker(fakeBb(spawn, [webProject], get), pr, () => input, fastTiming);
+    expect(result.hasRepo).toBe(false);
+  });
+
   it("runs in a managed worktree of the PR branch, never the checkout", async () => {
     const spawn = vi.fn(async () => ({ id: "thr_1" }));
     const result = await spawnPrWorker(fakeBb(spawn), pr, () => input);

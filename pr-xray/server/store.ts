@@ -40,6 +40,8 @@ const MIGRATIONS = [
   `DROP TABLE viewed_groups`,
   `CREATE TABLE viewed_hunks (key TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (key, fingerprint))`,
   `ALTER TABLE analyses ADD COLUMN hunk_fingerprints TEXT`,
+  `ALTER TABLE analyses ADD COLUMN worker_cleaned INTEGER NOT NULL DEFAULT 0`,
+  `UPDATE analyses SET worker_cleaned = 1 WHERE status != 'running'`,
 ];
 
 interface CommentRow {
@@ -199,6 +201,21 @@ export function createStore(bb: BbPluginApi) {
         now(),
       );
       return id;
+    },
+
+    /** Workers of analyses that finished before `finishedBefore`, and that nothing has cleaned up yet. */
+    workersToClean(finishedBefore: string): string[] {
+      const rows = db
+        .prepare(
+          `SELECT worker_thread_id AS id FROM analyses
+           WHERE status != 'running' AND worker_cleaned = 0 AND worker_thread_id IS NOT NULL AND finished_at < ?`,
+        )
+        .all(finishedBefore) as { id: string }[];
+      return rows.map((row) => row.id);
+    },
+
+    markWorkerCleaned(threadId: string) {
+      db.prepare(`UPDATE analyses SET worker_cleaned = 1 WHERE worker_thread_id = ?`).run(threadId);
     },
 
     setAnalysisWorker(id: string, threadId: string) {

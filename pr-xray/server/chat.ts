@@ -10,6 +10,7 @@ import { annotatedDiff } from "./analysis";
 import { stripMarker } from "./comments";
 import type { Models } from "./models";
 import { spawnModelArgs } from "./models";
+import { orNullIfGone } from "./sdk-errors";
 import { spawnPrWorker } from "./worker-environment";
 import { createWorkerDir, removeWorkerDir } from "./worker-files";
 
@@ -95,6 +96,8 @@ export function createChat(deps: {
 }) {
   const { bb, models } = deps;
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Starting a chat can take 30s; questions asked meanwhile go to that same chat.
+  const starting = new Map<string, Promise<string>>();
 
   async function writeContext(ref: PrRef, tempDir: string) {
     const pr = await deps.loadPr(ref);
@@ -106,8 +109,8 @@ export function createChat(deps: {
   async function liveThread(ref: PrRef): Promise<{ id: string; tempDir: string } | null> {
     const stored = await bb.storage.kv.get(kvKey(ref));
     if (typeof stored !== "string") return null;
-    const thread = await bb.sdk.threads.get({ threadId: stored }).catch(() => null);
-    const metadata = await bb.sdk.threads.getPluginMetadata({ threadId: stored }).catch(() => ({}) as Record<string, unknown>);
+    const thread = await orNullIfGone(() => bb.sdk.threads.get({ threadId: stored }));
+    const metadata = (await orNullIfGone(() => bb.sdk.threads.getPluginMetadata({ threadId: stored }))) ?? {};
     const live = thread !== null && thread.deletedAt === null && thread.archivedAt === null;
     if (live && typeof metadata.tempDir === "string") return { id: stored, tempDir: metadata.tempDir };
     await bb.storage.kv.delete(kvKey(ref));
@@ -125,12 +128,29 @@ export function createChat(deps: {
     return thread.id;
   }
 
+  function send(threadId: string, question: string) {
+    return bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: question, mentions: [] }] });
+  }
+
   /** Asks in the PR's chat, starting it on the first question. */
   async function start(ref: PrRef, question: string): Promise<string> {
+    const key = prRefKey(ref);
+    const pending = starting.get(key);
+    if (pending) {
+      const threadId = await pending;
+      await send(threadId, question);
+      return threadId;
+    }
+    const finding = askOrCreate(ref, question).finally(() => starting.delete(key));
+    starting.set(key, finding);
+    return finding;
+  }
+
+  async function askOrCreate(ref: PrRef, question: string): Promise<string> {
     const existing = await liveThread(ref);
     if (existing !== null) {
       await writeContext(ref, existing.tempDir);
-      await bb.sdk.threads.send({ threadId: existing.id, mode: "queue-if-active", input: [{ type: "text", text: question, mentions: [] }] });
+      await send(existing.id, question);
       return existing.id;
     }
     const tempDir = await createWorkerDir();
