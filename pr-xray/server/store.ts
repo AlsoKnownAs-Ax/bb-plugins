@@ -300,8 +300,9 @@ export function createStore(bb: BbPluginApi) {
       db.prepare(`DELETE FROM pending_comments WHERE id = ?`).run(id);
     },
 
-    clearPendingComments(ref: PrRef) {
-      db.prepare(`DELETE FROM pending_comments WHERE key = ?`).run(prRefKey(ref));
+    removePendingComments(ids: string[]) {
+      const remove = db.prepare(`DELETE FROM pending_comments WHERE id = ?`);
+      for (const id of ids) remove.run(id);
     },
 
     // ---- stored comments ----

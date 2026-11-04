@@ -64,17 +64,24 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
   async function submitReview(ref: PrRef, event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES", body: string) {
     const headSha = await github.headSha(ref);
     const pending = store.pendingComments(ref);
-    const posted = await github.submitReview(
+    const reviewId = await github.submitReview(
       ref,
       headSha,
       event,
       body,
       pending.map(({ id: _id, createdAt: _createdAt, ...draft }) => draft),
     );
-    for (const comment of posted) recordPosted(ref, headSha, comment);
-    store.clearPendingComments(ref);
+    // GitHub has the review now: a later failure must not leave these drafts to be posted again.
+    store.removePendingComments(pending.map((comment) => comment.id));
+    if (pending.length > 0) {
+      try {
+        for (const comment of await github.reviewComments(ref, reviewId)) recordPosted(ref, headSha, comment);
+      } catch (error) {
+        bb.log.warn(`review ${reviewId} is posted, but its comments are not in the retro feed: ${String(error)}`);
+      }
+    }
     publish(ref);
-    return { posted: posted.length };
+    return { posted: pending.length };
   }
 
   async function reply(ref: PrRef, commentDatabaseId: number, body: string) {

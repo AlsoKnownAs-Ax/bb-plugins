@@ -236,7 +236,7 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
     event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES",
     body: string,
     comments: DraftComment[],
-  ): Promise<RawReviewComment[]> {
+  ): Promise<number> {
     const review = await request<{ id: number }>(
       "POST",
       `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews`,
@@ -247,11 +247,19 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
         comments: comments.map(commentPayload),
       },
     );
-    if (comments.length === 0) return [];
-    return request<RawReviewComment[]>(
-      "GET",
-      `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews/${review.id}/comments?per_page=100`,
-    );
+    return review.id;
+  }
+
+  async function reviewComments(ref: PrRef, reviewId: number): Promise<RawReviewComment[]> {
+    const comments: RawReviewComment[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await request<RawReviewComment[]>(
+        "GET",
+        `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/reviews/${reviewId}/comments?per_page=100&page=${page}`,
+      );
+      comments.push(...batch);
+      if (batch.length < 100) return comments;
+    }
   }
 
   async function reply(ref: PrRef, commentId: number, body: string) {
@@ -310,6 +318,7 @@ export function createGithub(getSettingsToken: () => Promise<string | undefined>
     baseSha,
     createComment,
     submitReview,
+    reviewComments,
     reply,
     getComment,
     updateCommentBody,
