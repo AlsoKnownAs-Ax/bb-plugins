@@ -8,6 +8,8 @@ import { Icon } from "@/components/ui/icon";
 import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { PrRef } from "../shared/schema";
+import { useAgentConfirmContext } from "./agent-confirm";
+import { AgentDeclined } from "./agent-trust";
 import { errorMessage, type Rpc } from "./useReview";
 
 const SUGGESTIONS = [
@@ -34,6 +36,7 @@ export function ChatBubble({
   // undefined: not loaded yet; null: no chat for this PR yet.
   const [threadId, setThreadId] = useState<string | null | undefined>(undefined);
   const [focusRequest, setFocusRequest] = useState(0);
+  const { confirmAgent } = useAgentConfirmContext();
 
   useEffect(() => {
     if (!openRequest) return;
@@ -51,6 +54,14 @@ export function ChatBubble({
       },
     );
   }, [open, threadId, rpc, prRef]);
+
+  // Others may have commented since the chat began, and opening it adds their text to its context.
+  useEffect(() => {
+    if (!open || !threadId) return;
+    void confirmAgent("chat").then((accepted) => {
+      if (!accepted) setOpen(false);
+    });
+  }, [open, threadId, confirmAgent]);
 
   useEffect(() => {
     if (open) setFocusRequest(Date.now());
@@ -134,7 +145,7 @@ function FirstQuestion({ focusRequest, onAsk }: { focusRequest: number; onAsk: (
     try {
       await onAsk(text);
     } catch (cause) {
-      toast.error(errorMessage(cause));
+      if (!(cause instanceof AgentDeclined)) toast.error(errorMessage(cause));
       setSending(false);
     }
   };

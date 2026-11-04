@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { AnalysisRecord, DiagramNode, ReviewGroup, StoredComment } from "../shared/schema";
 import { Composer, TagChip } from "./comments";
 import { DiagramCanvas } from "./DiagramCanvas";
+import { useAgentConfirmContext } from "./agent-confirm";
 import { errorMessage, type ReviewGet, type Rpc } from "./useReview";
 
 const SEVERITY_STYLE = {
@@ -52,7 +53,9 @@ export function ExplainTab({
     [focusGroupId?.nonce, diagram],
   );
 
+  const { confirmAgent } = useAgentConfirmContext();
   const fixAll = async () => {
+    if (!(await confirmAgent("fix"))) return;
     try {
       const { threadId } = await rpc.call("fix.allDiagram", { ref: data.pr.ref });
       // Stay here; open the thread from the toast when the plan is ready.

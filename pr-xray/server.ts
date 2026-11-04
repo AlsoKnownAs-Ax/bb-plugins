@@ -5,7 +5,7 @@ import { z } from "zod";
 import { rpcContract } from "./shared/contract";
 import { parsePrRef, prRefKey, prRefToSubPath, REVIEW_PANEL_PATH } from "./shared/pr-ref";
 import { threadsToFix } from "./shared/fix-scope";
-import type { PrDetails, PrRef, ReviewThread } from "./shared/schema";
+import type { FixScope, PrDetails, PrRef, ReviewThread } from "./shared/schema";
 import { agentTools, REVIEW_TOOL } from "./server/agent-tools";
 import { createAnalysis, findTicketUrl } from "./server/analysis";
 import { chatInstructions, createChat } from "./server/chat";
@@ -88,7 +88,7 @@ export default async function plugin(bb: BbPluginApi) {
     return { pr, analysis: latest?.headSha === pr.headSha ? latest : null };
   }
 
-  function startFix(pr: PrDetails, threads: ReviewThread[]) {
+  function startFix(pr: PrDetails, threads: ReviewThread[], scope: FixScope) {
     const tags = new Map<number, string>();
     for (const thread of threads) {
       for (const comment of thread.comments) {
@@ -96,7 +96,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (tag) tags.set(comment.databaseId, tag);
       }
     }
-    return fixDiffComments(bb, pr, threads, tags);
+    return fixDiffComments(bb, pr, threads, tags, scope);
   }
 
   bb.rpc.register(rpcContract, {
@@ -236,13 +236,13 @@ export default async function plugin(bb: BbPluginApi) {
       if (existing) comments.publish(existing.ref);
       return { ok: true };
     },
-    async "fix.thread"({ ref, threadId }) {
+    async "fix.thread"({ ref, threadId, scope }) {
       const pr = await loadPr(ref, true);
       const thread = pr.threads.find((candidate) => candidate.id === threadId);
       if (!thread) throw new Error("That review thread no longer exists.");
-      const mine = threadsToFix([thread], pr.viewer, "mine");
-      if (mine.length === 0) throw new Error("You have no unresolved comments on that thread.");
-      return startFix(pr, mine);
+      const scoped = threadsToFix([thread], pr.viewer, scope);
+      if (scoped.length === 0) throw new Error(scope === "mine" ? "You have no unresolved comments on that thread." : "That thread is resolved.");
+      return startFix(pr, scoped, scope);
     },
     async "fix.allDiff"({ ref, scope }) {
       const pr = await loadPr(ref, true);
@@ -250,7 +250,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (threads.length === 0) {
         throw new Error(scope === "mine" ? "There are no unresolved review threads with your comments." : "There are no unresolved review threads.");
       }
-      return startFix(pr, threads);
+      return startFix(pr, threads, scope);
     },
     async "fix.allDiagram"({ ref }) {
       const pr = await loadPr(ref, true);

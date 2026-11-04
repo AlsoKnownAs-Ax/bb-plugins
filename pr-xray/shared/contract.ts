@@ -142,7 +142,7 @@ export const rpcContract = defineRpcContract({
     output: ok,
   },
   "fix.thread": {
-    input: z.object({ ref: prRefSchema, threadId: z.string() }),
+    input: z.object({ ref: prRefSchema, threadId: z.string(), scope: fixScopeSchema }),
     output: threadOut,
   },
   "fix.allDiff": {

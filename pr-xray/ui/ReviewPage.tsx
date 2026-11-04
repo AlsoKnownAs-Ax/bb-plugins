@@ -4,14 +4,13 @@ import { createPortal } from "react-dom";
 import { useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { usePortalScopeProps } from "@/lib/portal-scope";
 import { cn } from "@/lib/utils";
-import { prRefKey } from "../shared/pr-ref";
 import type { PrRef } from "../shared/schema";
-import { needsAgentWarning, type AgentJob } from "./agent-trust";
+import { AgentConfirmProvider, useAgentConfirm } from "./agent-confirm";
+import { AgentDeclined } from "./agent-trust";
 import { ChatBubble } from "./ChatBubble";
 import { DiffTab, type ViewMode } from "./DiffTab";
 import { displayGroups } from "./diff-utils";
@@ -108,25 +107,13 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
     [prRef, rpc],
   );
 
-  const warningKey = `pr-xray:agent-warning:${prRefKey(prRef)}`;
-  const [agentWarning, setAgentWarning] = useState<((accepted: boolean) => void) | null>(null);
-  const confirmAgent = useCallback(
-    (job: AgentJob) => {
-      if (!data || !needsAgentWarning(data.pr, job) || localStorage.getItem(warningKey)) return Promise.resolve(true);
-      return new Promise<boolean>((resolve) => setAgentWarning(() => resolve));
-    },
-    [data, warningKey],
-  );
-  const answerAgentWarning = (accepted: boolean) => {
-    if (accepted) localStorage.setItem(warningKey, "accepted");
-    agentWarning?.(accepted);
-    setAgentWarning(null);
-  };
+  const { confirmAgent, confirmOthersComments, dialog: agentDialog } = useAgentConfirm(prRef, data?.pr ?? null);
+  const agentConfirm = useMemo(() => ({ confirmAgent, confirmOthersComments }), [confirmAgent, confirmOthersComments]);
 
   const askChat = useCallback(
     async (question: string) => {
       // Throwing keeps the question in its text box.
-      if (!(await confirmAgent("chat"))) throw new Error("Chat not started.");
+      if (!(await confirmAgent("chat"))) throw new AgentDeclined();
       const { threadId } = await rpc.call("chat.start", { ref: prRef, question });
       setChatRequest({ threadId, nonce: Date.now() });
     },
@@ -168,6 +155,7 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
 
   return (
     <FocusFrame focus={focus}>
+      <AgentConfirmProvider value={agentConfirm}>
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -293,22 +281,8 @@ export function ReviewPage({ prRef }: { prRef: PrRef }) {
         )}
       </div>
       <ChatBubble rpc={rpc} prRef={prRef} onAsk={askChat} openRequest={chatRequest} />
-      <Dialog open={agentWarning !== null} onOpenChange={(open) => !open && answerAgentWarning(false)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Let an agent read someone else's text?</DialogTitle>
-            <DialogDescription>
-              This PR has content written by other people, and a malicious PR or comment can prompt-inject the agent that reads it. With Codex, that agent can reach the internet and run gh with your login. Continue only if you trust everyone who wrote this PR and its comments.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => answerAgentWarning(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => answerAgentWarning(true)}>Continue</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {agentDialog}
+      </AgentConfirmProvider>
     </FocusFrame>
   );
 }

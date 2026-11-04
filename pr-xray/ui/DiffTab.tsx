@@ -12,12 +12,13 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { threadsToFix } from "../shared/fix-scope";
 import type { DraftComment, FixScope, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
+import { useAgentConfirmContext } from "./agent-confirm";
 import { Composer, PendingView, ThreadView } from "./comments";
 import { prRefKey } from "../shared/pr-ref";
 import { draftInDiff, firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
@@ -86,7 +87,7 @@ export function DiffTab({
   }, [data.comments]);
   const [draft, setDraft] = useState<DraftTarget | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
-  const [confirmFixAll, setConfirmFixAll] = useState(false);
+  const { confirmAgent, confirmOthersComments } = useAgentConfirmContext();
   const [fullFile, setFullFile] = useState<{ file: PrFile; content: string | null; loading: boolean } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeHunk, setActiveHunk] = useState<string | null>(null);
@@ -291,6 +292,7 @@ export function DiffTab({
   };
 
   const fixComments = async (scope: FixScope) => {
+    if (!(await (scope === "mine" ? confirmAgent("fix") : confirmOthersComments()))) return;
     try {
       const { threadId } = await rpc.call("fix.allDiff", { ref: pr.ref, scope });
       // Stay on the review; the fix runs in the background.
@@ -401,7 +403,7 @@ export function DiffTab({
             <Icon name="Bot" />
             Fix my open comments{myOpenThreads ? ` (${myOpenThreads})` : ""}
           </Button>
-          <Button className="w-full" size="sm" variant="outline" disabled={allOpenThreads === 0} onClick={() => setConfirmFixAll(true)}>
+          <Button className="w-full" size="sm" variant="outline" disabled={allOpenThreads === 0} onClick={() => void fixComments("all")}>
             <Icon name="Bot" />
             Fix all open comments{allOpenThreads ? ` (${allOpenThreads})` : ""}
           </Button>
@@ -491,29 +493,6 @@ export function DiffTab({
       </div>
 
       <SubmitReviewDialog open={submitOpen} onOpenChange={setSubmitOpen} data={data} rpc={rpc} />
-      <Dialog open={confirmFixAll} onOpenChange={setConfirmFixAll}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Fix all open comments?</DialogTitle>
-            <DialogDescription>
-              An agent that can push to this branch will read every open comment, including comments from other people. On a public repo anyone can post a comment, and its text could prompt-inject the agent. Continue only if you trust everyone who commented.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmFixAll(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                setConfirmFixAll(false);
-                void fixComments("all");
-              }}
-            >
-              Fix all comments
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog open={fullFile !== null} onOpenChange={(open) => !open && setFullFile(null)}>
         <DialogContent className="max-h-[85vh] max-w-5xl overflow-hidden">
           <DialogHeader>
