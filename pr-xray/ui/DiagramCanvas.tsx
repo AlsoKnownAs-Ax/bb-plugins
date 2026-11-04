@@ -84,6 +84,15 @@ export function DiagramCanvas({
   };
   useEffect(fit, [layout]);
 
+  // Panning must not start a native text selection, which can spill into the page around the canvas.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const blockSelection = (event: Event) => event.preventDefault();
+    container.addEventListener("selectstart", blockSelection);
+    return () => container.removeEventListener("selectstart", blockSelection);
+  }, []);
+
   // Bring highlighted nodes (from "Show in diagram") into view.
   useEffect(() => {
     const first = [...highlightNodeIds].map((id) => layout.nodes.get(id)).find(Boolean);
@@ -143,7 +152,7 @@ export function DiagramCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative h-full min-h-[420px] w-full cursor-grab overflow-hidden rounded-lg border border-border bg-muted/20 active:cursor-grabbing"
+      className="relative h-full min-h-[420px] w-full cursor-grab select-none overflow-hidden rounded-lg border border-border bg-muted/20 active:cursor-grabbing"
       style={{ backgroundImage: "radial-gradient(currentColor 1px, transparent 1px)", backgroundSize: `${20 * view.scale}px ${20 * view.scale}px`, backgroundPosition: `${view.x}px ${view.y}px`, color: "color-mix(in oklab, var(--color-muted-foreground) 25%, transparent)" }}
       onWheel={onWheel}
       onPointerDown={onPointerDown}

@@ -58,6 +58,11 @@ export const rpcContract = defineRpcContract({
     input: z.object({ ref: prRefSchema, path: z.string(), previousPath: z.string().nullable() }),
     output: z.object({ old: z.string().nullable(), new: z.string().nullable() }),
   },
+  /** One file at a commit; null when it is missing or too large for GitHub to inline. */
+  "file.contentAt": {
+    input: z.object({ ref: prRefSchema, path: z.string(), sha: z.string() }),
+    output: z.object({ content: z.string().nullable() }),
+  },
   "comment.single": {
     input: z.object({ ref: prRefSchema, draft: draftCommentSchema }),
     output: ok,
@@ -83,6 +88,11 @@ export const rpcContract = defineRpcContract({
     output: z.object({ posted: z.number() }),
   },
   "thread.reply": {
+    input: z.object({ ref: prRefSchema, commentDatabaseId: z.number(), body: z.string().trim().min(1) }),
+    output: ok,
+  },
+  /** Rewrites a posted GitHub review comment; GitHub decides whether the viewer may edit it. */
+  "comment.edit": {
     input: z.object({ ref: prRefSchema, commentDatabaseId: z.number(), body: z.string().trim().min(1) }),
     output: ok,
   },

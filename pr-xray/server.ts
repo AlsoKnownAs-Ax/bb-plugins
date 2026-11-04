@@ -142,6 +142,9 @@ export default async function plugin(bb: BbPluginApi) {
       ]);
       return { old: oldText, new: newText };
     },
+    async "file.contentAt"({ ref, path, sha }) {
+      return { content: await github.fileContent(ref, path, sha) };
+    },
     async "comment.single"({ ref, draft }) {
       await comments.postSingle(ref, draft);
       invalidate(ref);
@@ -169,6 +172,11 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async "thread.reply"({ ref, commentDatabaseId, body }) {
       await comments.reply(ref, commentDatabaseId, body);
+      invalidate(ref);
+      return { ok: true };
+    },
+    async "comment.edit"({ ref, commentDatabaseId, body }) {
+      await comments.editBody(ref, commentDatabaseId, body);
       invalidate(ref);
       return { ok: true };
     },

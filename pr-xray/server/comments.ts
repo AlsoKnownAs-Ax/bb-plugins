@@ -84,6 +84,19 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
     publish(ref);
   }
 
+  /** Replaces a posted comment's text, keeping its hidden tag marker. */
+  async function editBody(ref: PrRef, commentDatabaseId: number, body: string) {
+    const text = stripMarker(body).trim();
+    if (text === "") throw new Error("A comment can't be empty.");
+    const current = await github.getComment(ref, commentDatabaseId);
+    const stored = store.commentByGithubId(commentDatabaseId);
+    const existingMarker = MARKER.exec(current.body)?.[0] ?? "";
+    const next = stored?.tag ? withMarker(text, stored.tag) : `${text}${existingMarker}`;
+    await github.updateCommentBody(ref, commentDatabaseId, next);
+    if (stored) store.updateComment(stored.id, { body: text });
+    publish(ref);
+  }
+
   async function setThreadResolved(ref: PrRef, threadId: string, resolved: boolean, githubCommentIds: number[]) {
     await github.setThreadResolved(threadId, resolved);
     for (const githubId of githubCommentIds) {
@@ -225,6 +238,7 @@ export function createComments(deps: { bb: BbPluginApi; store: Store; github: Gi
     postSingle,
     submitReview,
     reply,
+    editBody,
     setThreadResolved,
     addDiagramComment,
     reconcileDiagramPins,

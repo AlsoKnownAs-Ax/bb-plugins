@@ -199,6 +199,7 @@ export function ThreadView({
   const settled = thread.isOutdated || thread.isResolved;
   const [collapsed, setCollapsed] = useState(settled);
   const [replying, setReplying] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const first = thread.comments[0];
   const mine = thread.comments.some((comment) => comment.author.toLowerCase() === viewer.toLowerCase());
@@ -262,6 +263,8 @@ export function ThreadView({
         <div className="space-y-3 px-3 py-3">
           {thread.comments.map((comment) => {
             const stored = storedByGithubId.get(comment.databaseId);
+            const isViewerComment = comment.author.toLowerCase() === viewer.toLowerCase();
+            const isEditing = editingCommentId === comment.id;
             return (
               <div key={comment.id} className="space-y-1">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -280,8 +283,36 @@ export function ThreadView({
                       onAutoTag={() => rpc.call("comment.autoTag", { commentId: stored.id })}
                     />
                   ) : null}
+                  {isViewerComment && !isEditing ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="ml-auto h-6 px-2 text-xs"
+                      onClick={() => setEditingCommentId(comment.id)}
+                    >
+                      Edit
+                    </Button>
+                  ) : null}
                 </div>
-                <Markdown content={comment.body.replace(MARKER, "")} className="text-sm" />
+                {isEditing ? (
+                  <Composer
+                    placeholder="Edit comment"
+                    initial={comment.body.replace(MARKER, "")}
+                    onCancel={() => setEditingCommentId(null)}
+                    actions={[
+                      {
+                        label: "Save",
+                        primary: true,
+                        run: async (body) => {
+                          await rpc.call("comment.edit", { ref: prRef, commentDatabaseId: comment.databaseId, body });
+                          setEditingCommentId(null);
+                        },
+                      },
+                    ]}
+                  />
+                ) : (
+                  <Markdown content={comment.body.replace(MARKER, "")} className="text-sm" />
+                )}
               </div>
             );
           })}

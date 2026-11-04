@@ -20,8 +20,9 @@ type Tab = "diff" | "explain";
 function FocusFrame({ focus, children }: { focus: boolean; children: ReactNode }) {
   const scope = usePortalScopeProps();
   if (!focus) return <div className="relative flex h-full min-h-0 flex-1 flex-col">{children}</div>;
+  // One layer below bb's toaster (z-index 49), so toasts stay visible in focus mode.
   return createPortal(
-    <div {...scope} className="fixed inset-0 z-50 flex flex-col bg-background text-foreground">
+    <div {...scope} className="fixed inset-0 z-[48] flex flex-col bg-background text-foreground">
       {children}
     </div>,
     document.body,

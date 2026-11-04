@@ -1,8 +1,8 @@
 // The grouped diff: a reading-path sidebar and hunk diffs with GitHub-style
 // inline comments.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PatchDiff } from "@pierre/diffs/react";
-import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import { FileDiff } from "@pierre/diffs/react";
+import type { DiffLineAnnotation, FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
 import {
   experimental_SourceCode as SourceCode,
   experimental_useCodeTheme as useCodeTheme,
@@ -18,7 +18,8 @@ import { TEXTAREA_CLASS } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { DraftComment, Hunk, PendingComment, PrFile, ReviewGroup, ReviewThread, StoredComment } from "../shared/schema";
 import { Composer, PendingView, ThreadView } from "./comments";
-import { filePatch, firstChangedLine, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
+import { prRefKey } from "../shared/pr-ref";
+import { firstChangedLine, hunkFileDiff, hunkRange, lineInHunks, sideLines, threadVisibleIn } from "./diff-utils";
 import { errorMessage, type ReviewGet, type Rpc } from "./useReview";
 
 export type ViewMode = "unified" | "split";
@@ -678,6 +679,9 @@ const SEPARATOR_CSS = `
   content: "⋯  ";
   font-style: normal;
 }
+[data-separator] [data-expand-button] {
+  display: none;
+}
 `;
 
 /**
@@ -690,6 +694,53 @@ const SOFT_CHANGE_BG = Object.fromEntries(
     [`--diffs-bg-${kind}-emphasis-override`, `light-dark(rgb(from var(--diffs-${kind}-base) r g b / .12), rgb(from var(--diffs-${kind}-base) r g b / .12))`],
   ]),
 );
+
+/** File text by commit, shared by a file's hunks. Commits don't change, so entries stay valid. */
+const fileTextCache = new Map<string, Promise<string | null>>();
+
+function fetchFileText(rpc: Rpc, ref: ReviewGet["pr"]["ref"], path: string, sha: string): Promise<string | null> {
+  const key = `${prRefKey(ref)}:${sha}:${path}`;
+  const cached = fileTextCache.get(key);
+  if (cached) return cached;
+  const request = rpc.call("file.contentAt", { ref, path, sha }).then(({ content }) => content);
+  // A failed fetch only costs highlighting accuracy, so let the next mount retry.
+  request.catch(() => fileTextCache.delete(key));
+  fileTextCache.set(key, request);
+  return request;
+}
+
+/**
+ * The hunk's parsed diff, carrying the code above it once that has loaded.
+ * Until then, or if it can't load, the hunk is highlighted on its own.
+ */
+function useHunkFileDiff(rpc: Rpc, pr: ReviewGet["pr"], file: PrFile, hunk: Hunk): FileDiffMetadata {
+  const range = hunkRange(hunk);
+  // Added and removed files are one hunk from line 1, as is any hunk at the top of a file.
+  const needsContext = file.status !== "added" && file.status !== "removed" && range.newStart > 1;
+  const contextKey = needsContext ? `${pr.headSha}:${file.path}` : null;
+  const [loaded, setLoaded] = useState<{ key: string; text: string | null } | null>(null);
+
+  useEffect(() => {
+    if (contextKey === null) return;
+    let cancelled = false;
+    fetchFileText(rpc, pr.ref, file.path, pr.headSha)
+      .then((text) => {
+        if (!cancelled) setLoaded({ key: contextKey, text });
+      })
+      .catch(() => {
+        // Keep the hunk-only highlighting.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [contextKey, file.path, pr.headSha, pr.ref, rpc]);
+
+  const text = loaded !== null && loaded.key === contextKey ? loaded.text : null;
+  return useMemo(() => {
+    const fileHunks = pr.hunks.filter((candidate) => candidate.fileIndex === file.index);
+    return hunkFileDiff(file, fileHunks, hunk, text);
+  }, [file, hunk, pr.hunks, text]);
+}
 
 function HunkDiff({
   hunk,
@@ -723,7 +774,7 @@ function HunkDiff({
   const [selection, setSelection] = useState<SelectedLineRange | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-  const patch = useMemo(() => filePatch(file, [hunk]), [file, hunk]);
+  const fileDiff = useHunkFileDiff(rpc, pr, file, hunk);
 
   const annotations = useMemo(() => {
     const byLine = new Map<string, { side: "LEFT" | "RIGHT"; line: number; items: AnnotationItem[] }>();
@@ -761,6 +812,8 @@ function HunkDiff({
       theme: codeTheme.name as never,
       enableGutterUtility: true,
       enableLineSelection: true,
+      // Only show lines from the hunk: GitHub rejects comments on the ones around it.
+      collapsedContextThreshold: 0,
       lineHoverHighlight: "number" as const,
       unsafeCSS: SEPARATOR_CSS,
       onLineSelected: (range: SelectedLineRange | null) => setSelection(range),
@@ -842,8 +895,8 @@ function HunkDiff({
       className={cn("scroll-mt-12 border-b border-dashed border-border last:border-b-0", active && "ring-1 ring-inset ring-ring")}
       style={{ "--diffs-font-size": "12px", "--diffs-line-height": "18px", ...SOFT_CHANGE_BG } as React.CSSProperties}
     >
-      <PatchDiff<AnnotationItem[]>
-        patch={patch}
+      <FileDiff<AnnotationItem[]>
+        fileDiff={fileDiff}
         options={options}
         lineAnnotations={annotations}
         selectedLines={selection}
@@ -869,11 +922,14 @@ function SubmitReviewDialog({
   const [busy, setBusy] = useState(false);
   const [dictating, setDictating] = useState(false);
   const own = data.pr.isOwnPr;
+  const submittedEvent = own ? "COMMENT" : event;
+  // GitHub only accepts an empty review when it is an approval.
+  const canSubmit = submittedEvent === "APPROVE" || data.pending.length > 0 || body.trim() !== "";
   const submit = async () => {
     setBusy(true);
     try {
-      const { posted } = await rpc.call("review.submit", { ref: data.pr.ref, event: own ? "COMMENT" : event, body });
-      toast.success(`Review submitted with ${posted} comment${posted === 1 ? "" : "s"}`);
+      const { posted } = await rpc.call("review.submit", { ref: data.pr.ref, event: submittedEvent, body });
+      toast.success(posted === 0 && submittedEvent === "APPROVE" ? "Pull request approved" : `Review submitted with ${posted} comment${posted === 1 ? "" : "s"}`);
       setBody("");
       onOpenChange(false);
     } catch (error) {
@@ -913,7 +969,7 @@ function SubmitReviewDialog({
                   name="review-event"
                   className="mt-1"
                   disabled={disabled}
-                  checked={(own ? "COMMENT" : event) === option.value}
+                  checked={submittedEvent === option.value}
                   onChange={() => setEvent(option.value)}
                 />
                 <span>
@@ -930,7 +986,7 @@ function SubmitReviewDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || dictating || (data.pending.length === 0 && body.trim() === "")}>
+          <Button onClick={() => void submit()} disabled={busy || dictating || !canSubmit}>
             Submit review
           </Button>
         </DialogFooter>
